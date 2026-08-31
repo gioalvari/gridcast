@@ -19,6 +19,7 @@ ENTSOE_KEYCHAIN_SERVICE = "gridcast-entsoe-api-token"
 ITALY_BIDDING_ZONE = "10YIT-GRTN-----B"
 ACTUAL_TOTAL_LOAD_DOCUMENT = "A65"
 REALIZED_PROCESS = "A16"
+_CURL_METADATA_DELIMITER = b"\nGRIDCAST_CURL_METADATA:"
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,8 @@ def download_actual_load_xml(
     authenticated_url = f"{ENTSOE_API_URL}?{urllib.parse.urlencode(parameters)}"
     curl_config = f'url = "{authenticated_url}"\n'
     destination.parent.mkdir(parents=True, exist_ok=True)
+    status_code = "unknown"
+    content_type = "unknown"
     try:
         for attempt in range(1, retries + 1):
             result = subprocess.run(
@@ -164,6 +167,8 @@ def download_actual_load_xml(
                     "--fail-with-body",
                     "--retry",
                     "0",
+                    "--write-out",
+                    "\nGRIDCAST_CURL_METADATA:%{http_code}|%{content_type}",
                     "--config",
                     "-",
                 ],
@@ -171,13 +176,18 @@ def download_actual_load_xml(
                 capture_output=True,
                 check=False,
             )
-            _raise_api_acknowledgement(result.stdout)
+            payload, status_code, content_type = _split_curl_response(result.stdout)
+            _raise_api_acknowledgement(payload)
             if result.returncode == 0:
-                destination.write_bytes(result.stdout)
+                destination.write_bytes(payload)
                 return destination
             if attempt < retries:
                 time.sleep(float(2 ** (attempt - 1)))
-        msg = "ENTSO-E request failed after retries; response was not valid XML"
+        media_type = content_type or "unknown"
+        msg = (
+            f"ENTSO-E request failed after retries (HTTP {status_code}, "
+            f"content type {media_type})"
+        )
         raise RuntimeError(msg)
     finally:
         token = authenticated_url = curl_config = ""
@@ -363,6 +373,14 @@ def _raise_api_acknowledgement(payload: bytes) -> None:
         "unspecified API error",
     )
     raise RuntimeError(f"ENTSO-E API rejected the request: {reason}")
+
+
+def _split_curl_response(payload: bytes) -> tuple[bytes, str, str]:
+    if _CURL_METADATA_DELIMITER not in payload:
+        return payload, "unknown", "unknown"
+    body, metadata = payload.rsplit(_CURL_METADATA_DELIMITER, 1)
+    status_code, _, content_type = metadata.decode(errors="replace").partition("|")
+    return body, status_code or "unknown", content_type or "unknown"
 
 
 def _children(element: ET.Element, name: str) -> list[ET.Element]:

@@ -67,7 +67,8 @@ def test_download_passes_token_only_through_stdin(
     ) -> subprocess.CompletedProcess[bytes]:
         captured["args"] = args
         captured["input"] = kwargs["input"]
-        return subprocess.CompletedProcess(args, 0, stdout=xml, stderr=b"")
+        stdout = xml + b"\nGRIDCAST_CURL_METADATA:200|application/xml"
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr=b"")
 
     monkeypatch.setattr("gridcast.entsoe.get_entsoe_token", lambda: "secret-token")
     monkeypatch.setattr("gridcast.entsoe.subprocess.run", fake_run)
@@ -105,9 +106,11 @@ def test_download_validates_dates_retries_and_cache(
     monkeypatch.setattr("gridcast.entsoe.get_entsoe_token", lambda: "secret")
     monkeypatch.setattr(
         "gridcast.entsoe.subprocess.run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args, 22, b"html", b""),
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 22, b"html\nGRIDCAST_CURL_METADATA:503|text/html", b""
+        ),
     )
-    with pytest.raises(RuntimeError, match="after retries"):
+    with pytest.raises(RuntimeError, match="HTTP 503, content type text/html"):
         download_actual_load_xml(
             destination, start, datetime(2024, 1, 2, tzinfo=UTC), retries=1
         )
@@ -123,7 +126,12 @@ def test_download_surfaces_api_acknowledgement(
     monkeypatch.setattr("gridcast.entsoe.get_entsoe_token", lambda: "secret")
     monkeypatch.setattr(
         "gridcast.entsoe.subprocess.run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args, 22, payload, b""),
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args,
+            22,
+            payload + b"\nGRIDCAST_CURL_METADATA:401|application/xml",
+            b"",
+        ),
     )
 
     with pytest.raises(RuntimeError, match="invalid token"):
