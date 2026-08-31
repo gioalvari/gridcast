@@ -211,3 +211,17 @@ def test_entsoe_command_passes_dates_and_paths(
     assert captured["start"] == datetime(2024, 1, 1, tzinfo=UTC)
     assert captured["end"] == datetime(2024, 1, 2, tzinfo=UTC)
     assert captured["force"] is True
+
+
+def test_day_ahead_contract_command() -> None:
+    assert (
+        main(
+            [
+                "day-ahead",
+                "contract",
+                "--delivery-date",
+                "2024-03-31",
+            ]
+        )
+        == 0
+    )

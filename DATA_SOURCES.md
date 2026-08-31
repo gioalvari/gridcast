@@ -56,3 +56,16 @@ The token is read from `ENTSOE_API_TOKEN` in CI or from the macOS Keychain
 service `gridcast-entsoe-api-token` locally. The authenticated URL is passed to
 curl through standard input rather than process arguments, so the token does
 not appear in process listings or command logs.
+
+## Open-Meteo archived model runs
+
+- API: [Open-Meteo Single Runs API](https://open-meteo.com/en/docs/single-runs-api)
+- Model: one explicit ECMWF IFS run initialized at 00 UTC on D-1
+- Nodes: Bari, Bologna, Cagliari, Milan, Naples, Palermo, Rome, and Turin
+- Variables: temperature, humidity, shortwave radiation, wind speed, cloud cover
+
+Unlike ERA5 reanalysis, archived model runs represent forecasts from one model
+vintage. GridCast records run initialization and conservative availability
+timestamps, then rejects any run that was not public at the operational forecast
+origin. Source availability does not imply unrestricted redistribution rights;
+raw responses remain outside Git.

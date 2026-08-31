@@ -2,7 +2,7 @@ import argparse
 import json
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from gridcast.backtesting import BacktestConfig, rolling_backtest
@@ -11,6 +11,7 @@ from gridcast.benchmark import (
     run_pjme_benchmark,
     write_benchmark_artifacts,
 )
+from gridcast.contracts import ForecastContract
 from gridcast.data import generate_synthetic_load
 from gridcast.eda import create_eda_report
 from gridcast.entsoe import ITALY_BIDDING_ZONE, ingest_entsoe_actual_load
@@ -26,6 +27,7 @@ from gridcast.probabilistic import (
     write_probabilistic_artifacts,
 )
 from gridcast.weather import ingest_temperature
+from gridcast.weather_runs import ArchivedWeatherClient, validate_weather_run_coverage
 
 LOGGER = logging.getLogger(__name__)
 
@@ -161,6 +163,20 @@ def build_parser() -> argparse.ArgumentParser:
     performance.add_argument("--n-estimators", type=int, default=300)
     performance.add_argument("--warmup-runs", type=int, default=5)
     performance.add_argument("--repetitions", type=int, default=100)
+    day_ahead = subparsers.add_parser(
+        "day-ahead", help="inspect operational Italian forecast contracts"
+    )
+    day_ahead_subparsers = day_ahead.add_subparsers(
+        dest="day_ahead_command", required=True
+    )
+    contract = day_ahead_subparsers.add_parser(
+        "contract", help="print the day-ahead timing contract"
+    )
+    contract.add_argument("--delivery-date", required=True)
+    check_weather = day_ahead_subparsers.add_parser(
+        "check-weather", help="validate one archived ECMWF run"
+    )
+    check_weather.add_argument("--delivery-date", required=True)
     return parser
 
 
@@ -370,4 +386,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             fastest["model"],
             fastest["prediction_median_ms"],
         )
+    elif args.command == "day-ahead":
+        delivery_date = date.fromisoformat(args.delivery_date)
+        contract = ForecastContract()
+        if args.day_ahead_command == "contract":
+            LOGGER.info(
+                "Day-ahead contract:\n%s",
+                json.dumps(contract.summary(delivery_date), indent=2),
+            )
+        elif args.day_ahead_command == "check-weather":
+            run = contract.weather_run(delivery_date)
+            contract.assert_run_available(run, delivery_date)
+            weather = ArchivedWeatherClient().fetch_run(run, delivery_date)
+            counts = validate_weather_run_coverage(weather, contract, delivery_date)
+            LOGGER.info(
+                "Archived weather run valid for %d nodes and %d delivery hours",
+                len(counts),
+                len(contract.delivery_intervals(delivery_date)),
+            )
     return 0

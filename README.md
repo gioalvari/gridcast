@@ -6,6 +6,8 @@
 
 GridCast is a reproducible energy forecasting workbench focused on honest
 temporal validation, uncertainty, and operationally meaningful evaluation.
+It now also contains the former GridLens operational day-ahead work, so there is
+one canonical energy-forecasting repository rather than two overlapping ones.
 
 ![Frozen-test model comparison](docs/assets/frozen-test-mae.svg)
 
@@ -89,6 +91,22 @@ Locally, the command reads the token from the macOS Keychain service
 `gridcast-entsoe-api-token`; in CI it reads the `ENTSOE_API_TOKEN` secret. A
 manual GitHub Actions workflow is included for bounded smoke tests. See
 [DATA_SOURCES.md](DATA_SOURCES.md) for scope, licensing, and security details.
+
+## Operational day-ahead contracts
+
+The Italian track makes data availability explicit: each forecast has a 10:00
+Europe/Rome D-1 origin, a DST-safe 23/24/25-hour delivery day, and one immutable
+ECMWF run that must have been published before issuance.
+
+```bash
+uv run gridcast day-ahead contract --delivery-date 2026-08-30
+uv run gridcast day-ahead check-weather --delivery-date 2026-08-30
+```
+
+It also adds asymmetric shortage/surplus decision costs and their cost-optimal
+forecast quantile. See
+[Operational day-ahead contract](docs/day-ahead-contract.md) and
+[GridLens consolidation](docs/gridlens-migration.md).
 
 ## Real-data benchmark
 
@@ -231,6 +249,8 @@ Weekly walk-forward validation and frozen test
 ## Roadmap
 
 - Seasonal conformal calibration
+- Italian day-ahead benchmark with archived weather vintages
+- Decision regret and day-block confidence intervals
 - Deployment of the API and dashboard to a public demo environment
 
 ## Development

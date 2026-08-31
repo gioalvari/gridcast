@@ -25,3 +25,8 @@ class Col(StrEnum):
     P10_ROLLING_CALIBRATED = "p10_rolling_calibrated_mw"
     P90_ROLLING_CALIBRATED = "p90_rolling_calibrated_mw"
     AREA = "area"
+    AVAILABLE_AT = "available_at"
+    FORECAST_ORIGIN = "forecast_origin"
+    LOCATION = "location"
+    RUN_INITIALIZED_AT = "run_initialized_at"
+    VALID_AT = "valid_at"
