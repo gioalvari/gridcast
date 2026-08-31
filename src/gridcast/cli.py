@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from gridcast.backtesting import BacktestConfig, rolling_backtest
@@ -12,6 +13,7 @@ from gridcast.benchmark import (
 )
 from gridcast.data import generate_synthetic_load
 from gridcast.eda import create_eda_report
+from gridcast.entsoe import ITALY_BIDDING_ZONE, ingest_entsoe_actual_load
 from gridcast.performance import (
     PerformanceConfig,
     run_performance_benchmark,
@@ -79,6 +81,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--report", type=Path, default=Path("artifacts/data/weather_quality.json")
     )
     weather.add_argument("--force", action="store_true")
+    entsoe = data_subparsers.add_parser(
+        "entsoe", help="download ENTSO-E actual total load"
+    )
+    entsoe.add_argument("--start", required=True, help="inclusive date, YYYY-MM-DD")
+    entsoe.add_argument("--end", required=True, help="exclusive date, YYYY-MM-DD")
+    entsoe.add_argument("--area", default=ITALY_BIDDING_ZONE)
+    entsoe.add_argument("--raw-dir", type=Path, default=Path("data/raw/entsoe"))
+    entsoe.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/processed/entsoe_italy_actual_load.parquet"),
+    )
+    entsoe.add_argument(
+        "--report", type=Path, default=Path("artifacts/data/entsoe_quality.json")
+    )
+    entsoe.add_argument("--force", action="store_true")
     eda = subparsers.add_parser("eda", help="create PJME exploratory analysis")
     eda.add_argument(
         "--input", type=Path, default=Path("data/processed/pjme_hourly.parquet")
@@ -238,6 +256,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             weather_report.observations,
             weather_report.start,
             weather_report.end,
+        )
+    elif args.command == "data" and args.data_command == "entsoe":
+        start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
+        end = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
+        entsoe_report = ingest_entsoe_actual_load(
+            args.raw_dir,
+            args.output,
+            args.report,
+            start,
+            end,
+            area=args.area,
+            force=args.force,
+        )
+        LOGGER.info(
+            "Prepared %d ENTSO-E load observations at %d-minute resolution",
+            entsoe_report.observations,
+            entsoe_report.resolution_minutes,
         )
     elif args.command == "eda":
         import pandas as pd

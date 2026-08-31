@@ -76,6 +76,20 @@ weekly profiles, and two publication-ready PNG charts in `artifacts/eda/`.
 See [PJME_EDA.md](PJME_EDA.md) for the current findings and
 [DATA_SOURCES.md](DATA_SOURCES.md) for provenance and timestamp caveats.
 
+## ENTSO-E data
+
+GridCast can also ingest authenticated actual total load from the ENTSO-E
+Transparency Platform. The token is never stored in the repository.
+
+```bash
+uv run gridcast data entsoe --start 2024-01-01 --end 2025-01-01
+```
+
+Locally, the command reads the token from the macOS Keychain service
+`gridcast-entsoe-api-token`; in CI it reads the `ENTSOE_API_TOKEN` secret. A
+manual GitHub Actions workflow is included for bounded smoke tests. See
+[DATA_SOURCES.md](DATA_SOURCES.md) for scope, licensing, and security details.
+
 ## Real-data benchmark
 
 Run the chronological PJME benchmark after preparing the data:

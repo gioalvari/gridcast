@@ -1,8 +1,10 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from gridcast.cli import main
 from gridcast.columns import Col
@@ -153,3 +155,59 @@ def test_performance_command_writes_measurements(tmp_path: Path) -> None:
     assert exit_status == 0
     measurements = pd.read_csv(output_path / "measurements.csv")
     assert len(measurements) == 3
+
+
+def test_entsoe_command_passes_dates_and_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Report:
+        observations = 96
+        resolution_minutes = 15
+
+    def fake_ingest(
+        raw_directory: Path,
+        output_path: Path,
+        report_path: Path,
+        start: datetime,
+        end: datetime,
+        *,
+        area: str,
+        force: bool,
+    ) -> Report:
+        captured.update(
+            raw=raw_directory,
+            output=output_path,
+            report=report_path,
+            start=start,
+            end=end,
+            area=area,
+            force=force,
+        )
+        return Report()
+
+    monkeypatch.setattr("gridcast.cli.ingest_entsoe_actual_load", fake_ingest)
+
+    exit_status = main(
+        [
+            "data",
+            "entsoe",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+            "--raw-dir",
+            str(tmp_path / "raw"),
+            "--output",
+            str(tmp_path / "load.parquet"),
+            "--report",
+            str(tmp_path / "quality.json"),
+            "--force",
+        ]
+    )
+
+    assert exit_status == 0
+    assert captured["start"] == datetime(2024, 1, 1, tzinfo=UTC)
+    assert captured["end"] == datetime(2024, 1, 2, tzinfo=UTC)
+    assert captured["force"] is True

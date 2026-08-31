@@ -1,4 +1,4 @@
-.PHONY: install check format test demo data weather eda benchmark probabilistic performance dashboard api docker-build full clean
+.PHONY: install check format test demo data weather entsoe eda benchmark probabilistic performance dashboard api docker-build full clean
 
 install:
 	uv sync --all-extras
@@ -24,6 +24,9 @@ data:
 
 weather:
 	uv run gridcast data weather
+
+entsoe:
+	uv run gridcast data entsoe --start 2024-01-01 --end 2025-01-01
 
 eda:
 	uv run gridcast eda

@@ -1,0 +1,33 @@
+name: ENTSO-E ingestion smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: Inclusive UTC date
+        required: true
+        default: "2024-01-01"
+      end:
+        description: Exclusive UTC date
+        required: true
+        default: "2024-01-08"
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Download and validate actual load
+        env:
+          ENTSOE_API_TOKEN: ${{ secrets.ENTSOE_API_TOKEN }}
+          START_DATE: ${{ inputs.start }}
+          END_DATE: ${{ inputs.end }}
+        run: |
+          uv run gridcast data entsoe \
+            --start "$START_DATE" \
+            --end "$END_DATE"

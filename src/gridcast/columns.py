@@ -22,3 +22,4 @@ class Col(StrEnum):
     P90_CALIBRATED = "p90_calibrated_mw"
     P10_HOURLY_CALIBRATED = "p10_hourly_calibrated_mw"
     P90_HOURLY_CALIBRATED = "p90_hourly_calibrated_mw"
+    AREA = "area"

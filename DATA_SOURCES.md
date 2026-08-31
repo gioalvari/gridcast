@@ -37,3 +37,22 @@ GridCast never uses contemporaneous realized temperature in forecast rows. It
 uses temperatures delayed by one and two weeks and a climatology computed from
 prior years only. Historical operational forecasts do not cover the complete
 2002-2018 evaluation period.
+
+## ENTSO-E Transparency Platform
+
+- API: [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/)
+- Dataset: actual total load (`documentType=A65`, `processType=A16`)
+- Default area: Italy bidding zone (`10YIT-GRTN-----B`)
+- Authentication: personal ENTSO-E security token
+- Output timezone: UTC
+- License and reuse: subject to the ENTSO-E Transparency Platform terms
+
+GridCast retrieves monthly XML chunks, supports 15-, 30-, and 60-minute period
+resolutions, validates temporal completeness, and caches normalized data as
+Snappy-compressed Parquet. Authenticated raw XML, processed datasets, and tokens
+remain outside Git.
+
+The token is read from `ENTSOE_API_TOKEN` in CI or from the macOS Keychain
+service `gridcast-entsoe-api-token` locally. The authenticated URL is passed to
+curl through standard input rather than process arguments, so the token does
+not appear in process listings or command logs.
