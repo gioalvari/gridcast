@@ -35,10 +35,14 @@ predicted values.
 | P50 MAE | 2,891.77 MW |
 | Raw P10-P90 coverage | 57.59% |
 | Conformal coverage | 80.04% |
+| Hour-conditional conformal coverage | 81.40% |
 | Target coverage | 80.00% |
 | Raw mean interval width | 5,842.13 MW |
 | Calibrated mean interval width | 8,984.87 MW |
+| Hour-conditional mean interval width | 9,366.19 MW |
 | Conformal correction per bound | 1,571.37 MW |
+| Global mean hourly coverage error | 2.40 percentage points |
+| Conditional mean hourly coverage error | 1.72 percentage points |
 
 ## Interpretation
 
@@ -52,12 +56,20 @@ raw interval. The plot for the latest test week also shows that a constant
 symmetric correction can be unnecessarily wide overnight while remaining
 valuable around volatile daytime peaks.
 
+An hour-conditional extension estimates 24 independent corrections using only
+the same validation folds. It reduces mean absolute hourly coverage error by
+28.5%, from 2.40 to 1.72 percentage points. The trade-off is 81.40% aggregate
+coverage and intervals that are 4.2% wider than the globally calibrated
+interval. GridCast therefore preserves both methods rather than presenting the
+conditional version as an unconditional improvement.
+
 ## Limitations
 
 - The interval has marginal coverage across the full test year; it does not
   guarantee 80% coverage for every hour, season, or individual week.
-- A single conformal correction ignores hour-dependent and seasonal error
-  variance.
+- The hour-conditional method uses only 84 validation observations per hour,
+  making each finite-sample correction relatively coarse.
+- Neither method guarantees coverage for each individual week or season.
 - ERA5 observations are used only through delayed values and prior-year
   climatology because archived operational forecasts do not span 2002-2018.
 - Quantile sorting avoids crossing but does not jointly train a coherent
@@ -65,6 +77,5 @@ valuable around volatile daytime peaks.
 
 ## Next experiment
 
-Calibrate residuals by forecast hour or season using rolling conformal windows,
-then compare conditional coverage and interval width against this global
-split-conformal baseline.
+Evaluate rolling calibration windows and seasonal groups against both current
+baselines, with explicit minimum sample sizes and no use of frozen-test labels.

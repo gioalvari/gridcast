@@ -55,6 +55,8 @@ def _write_dashboard_artifacts(root: Path) -> DashboardPaths:
             Col.P90: [13, 23, 33, 43],
             Col.P10_CALIBRATED: [5, 15, 25, 35],
             Col.P90_CALIBRATED: [15, 25, 35, 45],
+            Col.P10_HOURLY_CALIBRATED: [6, 16, 26, 36],
+            Col.P90_HOURLY_CALIBRATED: [14, 24, 34, 44],
             Col.SPLIT: ["test"] * 4,
             Col.FOLD: [1] * 4,
         }
@@ -64,8 +66,10 @@ def _write_dashboard_artifacts(root: Path) -> DashboardPaths:
             Col.SPLIT: ["test"],
             "raw_coverage": [0.5],
             "calibrated_coverage": [0.8],
+            "hourly_calibrated_coverage": [0.8],
             "raw_mean_width_mw": [5.0],
             "calibrated_mean_width_mw": [10.0],
+            "hourly_calibrated_mean_width_mw": [8.0],
         }
     )
     paths = DashboardPaths(

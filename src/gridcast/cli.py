@@ -277,10 +277,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             probabilistic_result.metrics["split"].eq("test")
         ].iloc[0]
         LOGGER.info(
-            "Probabilistic test: raw coverage %.3f, calibrated coverage %.3f, "
-            "width %.2f MW",
+            "Probabilistic test: raw coverage %.3f, global %.3f, hourly %.3f, "
+            "hourly width %.2f MW",
             test_metrics["raw_coverage"],
             test_metrics["calibrated_coverage"],
-            test_metrics["calibrated_mean_width_mw"],
+            test_metrics["hourly_calibrated_coverage"],
+            test_metrics["hourly_calibrated_mean_width_mw"],
         )
     return 0

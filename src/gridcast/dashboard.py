@@ -286,12 +286,23 @@ def _render_uncertainty(data: DashboardData) -> None:
         format_func=lambda value: f"Week {value}",
         key="probabilistic_fold",
     )
+    calibration = st.radio(
+        "Calibration",
+        options=["Hourly", "Global"],
+        horizontal=True,
+    )
     week = probabilistic_week(data.probabilistic_forecasts, "test", int(fold))
+    lower_column = (
+        Col.P10_HOURLY_CALIBRATED if calibration == "Hourly" else Col.P10_CALIBRATED
+    )
+    upper_column = (
+        Col.P90_HOURLY_CALIBRATED if calibration == "Hourly" else Col.P90_CALIBRATED
+    )
     chart = go.Figure()
     chart.add_trace(
         go.Scatter(
             x=week[Col.TIMESTAMP],
-            y=week[Col.P10_CALIBRATED],
+            y=week[lower_column],
             mode="lines",
             line=dict(color="rgba(66,183,200,0)"),
             hoverinfo="skip",
@@ -301,12 +312,12 @@ def _render_uncertainty(data: DashboardData) -> None:
     chart.add_trace(
         go.Scatter(
             x=week[Col.TIMESTAMP],
-            y=week[Col.P90_CALIBRATED],
+            y=week[upper_column],
             mode="lines",
             line=dict(color=CYAN, width=1),
             fill="tonexty",
             fillcolor=PALE_CYAN,
-            name="Conformal P10–P90",
+            name=f"{calibration} conformal P10–P90",
         )
     )
     chart.add_trace(
@@ -327,7 +338,9 @@ def _render_uncertainty(data: DashboardData) -> None:
             line=dict(color=INK, width=2.5),
         )
     )
-    chart.update_layout(title=f"Calibrated interval · frozen test week {fold}")
+    chart.update_layout(
+        title=f"{calibration} calibrated interval · frozen test week {fold}"
+    )
     chart.update_yaxes(title="Load (MW)")
     st.plotly_chart(
         _chart_layout(chart, 520),
@@ -343,25 +356,29 @@ def _render_uncertainty(data: DashboardData) -> None:
     columns = st.columns(4)
     columns[0].metric("Raw coverage", f"{float(metrics['raw_coverage']):.1%}")
     columns[1].metric(
-        "Calibrated coverage",
-        f"{float(metrics['calibrated_coverage']):.1%}",
-        delta=f"{float(metrics['calibrated_coverage'] - metrics['raw_coverage']):.1%}",
+        "Hourly coverage",
+        f"{float(metrics['hourly_calibrated_coverage']):.1%}",
+        delta=(
+            f"{float(metrics['hourly_calibrated_coverage'] - metrics['raw_coverage']):.1%}"
+        ),
     )
     columns[2].metric(
-        "Calibrated width", _format_mw(float(metrics["calibrated_mean_width_mw"]))
+        "Hourly width",
+        _format_mw(float(metrics["hourly_calibrated_mean_width_mw"])),
     )
     columns[3].metric("Correction / bound", _format_mw(correction))
 
     if isinstance(summary_test, dict):
         coverage = go.Figure(
             go.Bar(
-                x=["Target", "Raw", "Conformal"],
+                x=["Target", "Raw", "Global", "Hourly"],
                 y=[
                     0.8,
                     _as_float(summary_test.get("raw_coverage", 0)),
                     _as_float(summary_test.get("calibrated_coverage", 0)),
+                    _as_float(summary_test.get("hourly_calibrated_coverage", 0)),
                 ],
-                marker_color=[ORANGE, "#9ADBE5", CYAN],
+                marker_color=[ORANGE, "#9ADBE5", CYAN, "#5969A6"],
                 texttemplate="%{y:.1%}",
                 textposition="outside",
             )

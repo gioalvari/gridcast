@@ -96,6 +96,12 @@ class ProbabilisticMetadata(APIModel):
         Frozen-test coverage before calibration.
     calibrated_coverage : float
         Frozen-test coverage after calibration.
+    hourly_calibrated_coverage : float
+        Frozen-test coverage after hour-conditional calibration.
+    global_hourly_coverage_mae : float
+        Mean absolute hourly deviation from nominal coverage for global calibration.
+    conditional_hourly_coverage_mae : float
+        Mean absolute hourly deviation for hour-conditional calibration.
     """
 
     quantiles: list[float]
@@ -103,6 +109,9 @@ class ProbabilisticMetadata(APIModel):
     conformal_correction_mw: float = Field(ge=0.0)
     raw_coverage: float = Field(ge=0.0, le=1.0)
     calibrated_coverage: float = Field(ge=0.0, le=1.0)
+    hourly_calibrated_coverage: float = Field(ge=0.0, le=1.0)
+    global_hourly_coverage_mae: float = Field(ge=0.0, le=1.0)
+    conditional_hourly_coverage_mae: float = Field(ge=0.0, le=1.0)
 
 
 class MetadataResponse(APIModel):
@@ -158,6 +167,8 @@ class ProbabilisticForecast(APIModel):
     p90_mw: float
     p10_calibrated_mw: float
     p90_calibrated_mw: float
+    p10_hourly_calibrated_mw: float
+    p90_hourly_calibrated_mw: float
     split: str
     fold: int = Field(ge=1)
 

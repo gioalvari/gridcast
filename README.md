@@ -118,6 +118,9 @@ make probabilistic
 The raw quantile interval covers 57.59% of frozen-test observations. A
 validation-only split-conformal correction increases coverage to 80.04%, close
 to the 80% target, while increasing mean interval width from 5,842 to 8,985 MW.
+An hour-conditional variant reduces mean hourly coverage error by 28.5%, from
+2.40 to 1.72 percentage points, at the cost of 4.2% wider intervals and 81.40%
+aggregate coverage.
 See [PJME_PROBABILISTIC.md](PJME_PROBABILISTIC.md) for pinball losses,
 methodology, and limitations.
 
@@ -194,7 +197,7 @@ Weekly walk-forward validation and frozen test
 
 ## Roadmap
 
-- Conditional conformal calibration by hour and season
+- Rolling and seasonal conformal calibration
 - Inference latency and memory benchmarks
 - Deployment of the API and dashboard to a public demo environment
 

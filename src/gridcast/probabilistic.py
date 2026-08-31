@@ -80,11 +80,14 @@ class ProbabilisticResult:
         Validation and test probabilistic metrics.
     conformal_correction_mw : float
         Symmetric interval expansion learned from validation residuals.
+    hourly_corrections_mw : dict of int to float
+        Validation-only interval expansion learned separately for each hour.
     """
 
     forecasts: pd.DataFrame
     metrics: pd.DataFrame
     conformal_correction_mw: float
+    hourly_corrections_mw: dict[int, float]
 
 
 def conformal_correction(
@@ -146,6 +149,41 @@ def conformal_correction(
     return max(0.0, float(np.quantile(scores, probability, method="higher")))
 
 
+def hourly_conformal_corrections(
+    validation: pd.DataFrame,
+) -> dict[int, float]:
+    """Estimate one split-conformal correction for each local hour of day.
+
+    Parameters
+    ----------
+    validation : pandas.DataFrame
+        Validation forecasts containing timestamps, actuals, P10, and P90.
+
+    Returns
+    -------
+    dict
+        Corrections in megawatts keyed by hour from zero to 23.
+
+    Raises
+    ------
+    ValueError
+        If one or more hours are absent from validation.
+    """
+    corrections: dict[int, float] = {}
+    hours = validation[Col.TIMESTAMP].dt.hour
+    for hour in range(24):
+        group = validation.loc[hours.eq(hour)]
+        if group.empty:
+            msg = f"validation forecasts do not contain hour {hour}"
+            raise ValueError(msg)
+        corrections[hour] = conformal_correction(
+            group[Col.TARGET].to_numpy(dtype=np.float64),
+            group[Col.P10].to_numpy(dtype=np.float64),
+            group[Col.P90].to_numpy(dtype=np.float64),
+        )
+    return corrections
+
+
 def run_probabilistic_benchmark(
     data: pd.DataFrame,
     weather: pd.DataFrame,
@@ -199,6 +237,7 @@ def run_probabilistic_benchmark(
         validation[Col.P10].to_numpy(dtype=np.float64),
         validation[Col.P90].to_numpy(dtype=np.float64),
     )
+    hourly_corrections = hourly_conformal_corrections(validation)
     test = _forecast_origins(
         data,
         features,
@@ -210,8 +249,11 @@ def run_probabilistic_benchmark(
     forecasts = pd.concat([validation, test], ignore_index=True)
     forecasts[Col.P10_CALIBRATED] = forecasts[Col.P10] - correction
     forecasts[Col.P90_CALIBRATED] = forecasts[Col.P90] + correction
+    row_corrections = forecasts[Col.TIMESTAMP].dt.hour.map(hourly_corrections)
+    forecasts[Col.P10_HOURLY_CALIBRATED] = forecasts[Col.P10] - row_corrections
+    forecasts[Col.P90_HOURLY_CALIBRATED] = forecasts[Col.P90] + row_corrections
     metrics = _probabilistic_metrics(forecasts)
-    return ProbabilisticResult(forecasts, metrics, correction)
+    return ProbabilisticResult(forecasts, metrics, correction, hourly_corrections)
 
 
 def write_probabilistic_artifacts(
@@ -235,12 +277,18 @@ def write_probabilistic_artifacts(
         output_dir / "forecasts.parquet", index=False, compression="snappy"
     )
     result.metrics.to_csv(output_dir / "metrics.csv", index=False)
+    hourly_metrics = _hourly_coverage_metrics(result.forecasts)
+    hourly_metrics.to_csv(output_dir / "hourly_coverage.csv", index=False)
     test_metrics = result.metrics.loc[result.metrics[Col.SPLIT].eq("test")].iloc[0]
     metadata = {
         "config": asdict(config),
         "quantiles": [LOWER_QUANTILE, MEDIAN_QUANTILE, UPPER_QUANTILE],
         "target_coverage": TARGET_COVERAGE,
         "conformal_correction_mw": result.conformal_correction_mw,
+        "hourly_corrections_mw": {
+            str(hour): correction
+            for hour, correction in result.hourly_corrections_mw.items()
+        },
         "test": {
             key: float(test_metrics[key])
             for key in [
@@ -250,8 +298,12 @@ def write_probabilistic_artifacts(
                 "median_mae",
                 "raw_coverage",
                 "calibrated_coverage",
+                "hourly_calibrated_coverage",
                 "raw_mean_width_mw",
                 "calibrated_mean_width_mw",
+                "hourly_calibrated_mean_width_mw",
+                "global_hourly_coverage_mae",
+                "conditional_hourly_coverage_mae",
             ]
         },
     }
@@ -260,6 +312,7 @@ def write_probabilistic_artifacts(
     )
     _plot_latest_interval(result.forecasts, output_dir / "latest_test_interval.png")
     _plot_calibration(result.metrics, output_dir / "coverage.png")
+    _plot_hourly_coverage(hourly_metrics, output_dir / "hourly_coverage.png")
 
 
 def _forecast_origins(
@@ -320,6 +373,15 @@ def _probabilistic_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
             NDArray[np.float64],
             group[Col.P90_CALIBRATED].to_numpy(dtype=np.float64),
         )
+        hourly_lower = cast(
+            NDArray[np.float64],
+            group[Col.P10_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
+        )
+        hourly_upper = cast(
+            NDArray[np.float64],
+            group[Col.P90_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
+        )
+        hourly_metrics = _hourly_coverage_metrics(group)
         rows.append(
             {
                 Col.SPLIT: split,
@@ -331,10 +393,55 @@ def _probabilistic_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
                 "median_mae": mean_absolute_error(actual, p50),
                 "raw_coverage": interval_coverage(actual, p10, p90),
                 "calibrated_coverage": interval_coverage(actual, lower, upper),
+                "hourly_calibrated_coverage": interval_coverage(
+                    actual, hourly_lower, hourly_upper
+                ),
                 "raw_mean_width_mw": mean_interval_width(p10, p90),
                 "calibrated_mean_width_mw": mean_interval_width(lower, upper),
+                "hourly_calibrated_mean_width_mw": mean_interval_width(
+                    hourly_lower, hourly_upper
+                ),
+                "global_hourly_coverage_mae": float(
+                    np.mean(np.abs(hourly_metrics["global_coverage"] - TARGET_COVERAGE))
+                ),
+                "conditional_hourly_coverage_mae": float(
+                    np.mean(np.abs(hourly_metrics["hourly_coverage"] - TARGET_COVERAGE))
+                ),
             }
         )
+    return pd.DataFrame(rows)
+
+
+def _hourly_coverage_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, float | int | str]] = []
+    for split in forecasts[Col.SPLIT].drop_duplicates():
+        split_data = forecasts.loc[forecasts[Col.SPLIT].eq(split)]
+        hours = split_data[Col.TIMESTAMP].dt.hour
+        for hour in range(24):
+            group = split_data.loc[hours.eq(hour)]
+            actual = group[Col.TARGET].to_numpy(dtype=np.float64)
+            rows.append(
+                {
+                    Col.SPLIT: str(split),
+                    Col.HOUR: hour,
+                    "observations": len(group),
+                    "raw_coverage": interval_coverage(
+                        actual,
+                        group[Col.P10].to_numpy(dtype=np.float64),
+                        group[Col.P90].to_numpy(dtype=np.float64),
+                    ),
+                    "global_coverage": interval_coverage(
+                        actual,
+                        group[Col.P10_CALIBRATED].to_numpy(dtype=np.float64),
+                        group[Col.P90_CALIBRATED].to_numpy(dtype=np.float64),
+                    ),
+                    "hourly_coverage": interval_coverage(
+                        actual,
+                        group[Col.P10_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
+                        group[Col.P90_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
+                    ),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -366,11 +473,36 @@ def _plot_latest_interval(forecasts: pd.DataFrame, output_path: Path) -> None:
 def _plot_calibration(metrics: pd.DataFrame, output_path: Path) -> None:
     test = metrics.loc[metrics[Col.SPLIT].eq("test")].iloc[0]
     figure, axis = plt.subplots(figsize=(7, 5))
-    labels = ["Target", "Raw", "Conformal"]
-    values = [TARGET_COVERAGE, test["raw_coverage"], test["calibrated_coverage"]]
-    axis.bar(labels, values, color=["#ff7d00", "#7bdff2", "#15616d"])
+    labels = ["Target", "Raw", "Global", "Hourly"]
+    values = [
+        TARGET_COVERAGE,
+        test["raw_coverage"],
+        test["calibrated_coverage"],
+        test["hourly_calibrated_coverage"],
+    ]
+    axis.bar(labels, values, color=["#ff7d00", "#7bdff2", "#15616d", "#5969a6"])
     axis.set(title="Frozen test interval coverage", ylabel="Coverage", ylim=(0.0, 1.0))
     axis.grid(axis="y", alpha=0.2)
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=160)
+    plt.close(figure)
+
+
+def _plot_hourly_coverage(metrics: pd.DataFrame, output_path: Path) -> None:
+    test = metrics.loc[metrics[Col.SPLIT].eq("test")]
+    figure, axis = plt.subplots(figsize=(12, 5))
+    axis.axhline(TARGET_COVERAGE, color="#ff7d00", label="target", linewidth=2)
+    axis.plot(test[Col.HOUR], test["global_coverage"], label="global conformal")
+    axis.plot(test[Col.HOUR], test["hourly_coverage"], label="hourly conformal")
+    axis.set(
+        title="Frozen test coverage by hour",
+        xlabel="Hour",
+        ylabel="Coverage",
+        ylim=(0.0, 1.0),
+        xticks=range(24),
+    )
+    axis.legend()
+    axis.grid(alpha=0.2)
     figure.tight_layout()
     figure.savefig(output_path, dpi=160)
     plt.close(figure)

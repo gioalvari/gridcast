@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from gridcast.columns import Col
@@ -8,6 +9,7 @@ from gridcast.data import generate_synthetic_load
 from gridcast.probabilistic import (
     ProbabilisticConfig,
     conformal_correction,
+    hourly_conformal_corrections,
     run_probabilistic_benchmark,
     write_probabilistic_artifacts,
 )
@@ -35,6 +37,27 @@ def test_conformal_correction_validates_inputs() -> None:
         conformal_correction(values, values + 1.0, values)
 
 
+def test_hourly_corrections_require_and_calibrate_every_hour() -> None:
+    timestamps = pd.date_range("2024-01-01", periods=48, freq="h")
+    validation = pd.DataFrame(
+        {
+            Col.TIMESTAMP: timestamps,
+            Col.TARGET: np.arange(48, dtype=float),
+            Col.P10: np.arange(48, dtype=float) - 1.0,
+            Col.P90: np.arange(48, dtype=float) + 1.0,
+        }
+    )
+
+    corrections = hourly_conformal_corrections(validation)
+
+    assert set(corrections) == set(range(24))
+    assert all(correction == 0.0 for correction in corrections.values())
+    with pytest.raises(ValueError, match="hour 23"):
+        hourly_conformal_corrections(
+            validation.loc[validation[Col.TIMESTAMP].dt.hour.ne(23)]
+        )
+
+
 def test_probabilistic_benchmark_separates_calibration_and_test(
     tmp_path: Path,
 ) -> None:
@@ -57,11 +80,17 @@ def test_probabilistic_benchmark_separates_calibration_and_test(
     assert (result.forecasts[Col.P10_CALIBRATED] <= result.forecasts[Col.P10]).all()
     assert (result.forecasts[Col.P90_CALIBRATED] >= result.forecasts[Col.P90]).all()
     assert result.conformal_correction_mw >= 0.0
+    assert set(result.hourly_corrections_mw) == set(range(24))
+    assert (
+        result.forecasts[Col.P10_HOURLY_CALIBRATED] <= result.forecasts[Col.P10]
+    ).all()
 
     write_probabilistic_artifacts(result, config, tmp_path)
     assert {path.name for path in tmp_path.iterdir()} == {
         "coverage.png",
         "forecasts.parquet",
+        "hourly_coverage.csv",
+        "hourly_coverage.png",
         "latest_test_interval.png",
         "metrics.csv",
         "summary.json",

@@ -83,6 +83,15 @@ class GridCastService:
                 calibrated_coverage=self._float(
                     probabilistic_test.get("calibrated_coverage")
                 ),
+                hourly_calibrated_coverage=self._float(
+                    probabilistic_test.get("hourly_calibrated_coverage")
+                ),
+                global_hourly_coverage_mae=self._float(
+                    probabilistic_test.get("global_hourly_coverage_mae")
+                ),
+                conditional_hourly_coverage_mae=self._float(
+                    probabilistic_test.get("conditional_hourly_coverage_mae")
+                ),
             ),
         )
 
@@ -207,6 +216,8 @@ class GridCastService:
                 p90_mw=float(row[Col.P90]),
                 p10_calibrated_mw=float(row[Col.P10_CALIBRATED]),
                 p90_calibrated_mw=float(row[Col.P90_CALIBRATED]),
+                p10_hourly_calibrated_mw=float(row[Col.P10_HOURLY_CALIBRATED]),
+                p90_hourly_calibrated_mw=float(row[Col.P90_HOURLY_CALIBRATED]),
                 split=str(row[Col.SPLIT]),
                 fold=int(row[Col.FOLD]),
             )
