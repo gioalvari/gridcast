@@ -1,0 +1,22 @@
+from enum import StrEnum
+
+
+class Col(StrEnum):
+    """Canonical column names used by GridCast datasets and artifacts."""
+
+    TIMESTAMP = "dte_reference_date"
+    TARGET = "load_mw"
+    PREDICTION = "prediction_mw"
+    FOLD = "fold"
+    CUTOFF = "cutoff"
+    HOUR = "hour"
+    WEEKDAY = "weekday"
+    DATE = "date"
+    MODEL = "model"
+    SPLIT = "split"
+    TEMPERATURE = "temperature_2m_c"
+    P10 = "p10_mw"
+    P50 = "p50_mw"
+    P90 = "p90_mw"
+    P10_CALIBRATED = "p10_calibrated_mw"
+    P90_CALIBRATED = "p90_calibrated_mw"

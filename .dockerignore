@@ -1,0 +1,15 @@
+.DS_Store
+.coverage
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+artifacts
+data
+docs
+htmlcov
+tests
+*.egg-info
+*.pyc
