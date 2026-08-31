@@ -1,5 +1,9 @@
 # GridCast
 
+[![Quality](https://github.com/gioalvari/gridcast/actions/workflows/quality.yml/badge.svg)](https://github.com/gioalvari/gridcast/actions/workflows/quality.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-17242B.svg)](LICENSE)
+
 GridCast is a reproducible energy forecasting workbench focused on honest
 temporal validation, uncertainty, and operationally meaningful evaluation.
 
