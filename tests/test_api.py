@@ -6,7 +6,7 @@ import pytest
 
 from gridcast.api import app, get_gridcast_service
 from gridcast.api_service import GridCastService
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, MissingArtifactsError
 
 
@@ -15,7 +15,7 @@ def _service() -> GridCastService:
     validation_timestamps = pd.date_range("2017-12-25", periods=2, freq="h")
     leaderboard = pd.DataFrame(
         {
-            Col.SPLIT: ["test", "test"],
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT] * 2,
             Col.MODEL: ["lightgbm_exogenous", "seasonal_naive_168h"],
             "folds": [52, 52],
             "observations": [8736, 8736],
@@ -38,7 +38,7 @@ def _service() -> GridCastService:
                 30_000.0,
             ],
             Col.MODEL: ["lightgbm_exogenous"] * 4 + ["seasonal_naive_168h"] * 2,
-            Col.SPLIT: ["validation"] * 2 + ["test"] * 4,
+            Col.SPLIT: ["validation"] * 2 + [HISTORICAL_HOLDOUT_SPLIT] * 4,
             Col.FOLD: [1] * 6,
         }
     )
@@ -55,7 +55,7 @@ def _service() -> GridCastService:
             Col.P90_HOURLY_CALIBRATED: [32_500.0, 33_500.0],
             Col.P10_ROLLING_CALIBRATED: [27_200.0, 28_200.0],
             Col.P90_ROLLING_CALIBRATED: [32_800.0, 33_800.0],
-            Col.SPLIT: ["test"] * 2,
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT] * 2,
             Col.FOLD: [1] * 2,
         }
     )
@@ -79,12 +79,12 @@ def _service() -> GridCastService:
             "config": {
                 "horizon": 168,
                 "validation_folds": 12,
-                "test_folds": 52,
+                "holdout_folds": 52,
             },
             "quantiles": [0.1, 0.5, 0.9],
             "target_coverage": 0.8,
             "conformal_correction_mw": 1571.37,
-            "test": {
+            "historical_holdout": {
                 "raw_coverage": 0.576,
                 "calibrated_coverage": 0.8,
                 "hourly_calibrated_coverage": 0.814,
@@ -129,7 +129,7 @@ async def test_metadata_returns_evaluation_contract(client: httpx.AsyncClient) -
     assert response.status_code == 200
     payload = response.json()
     assert payload["dataset"]["observations"] == 145392
-    assert payload["experiment"]["test_folds"] == 52
+    assert payload["experiment"]["holdout_folds"] == 52
     assert payload["probabilistic"]["calibrated_coverage"] == pytest.approx(0.8)
     assert payload["probabilistic"]["hourly_calibrated_coverage"] == pytest.approx(
         0.814
@@ -250,3 +250,50 @@ async def test_performance_endpoint_reports_missing_artifact(
 
     assert response.status_code == 404
     assert "make performance" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_decisions_endpoint_returns_optional_results(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    point = pd.DataFrame(
+        {
+            "scenario": ["symmetric"],
+            "model": ["lightgbm"],
+            "shortage_cost": [1.0],
+            "surplus_cost": [1.0],
+            "optimal_quantile": [0.5],
+            "folds": [52],
+            "observations": [8736],
+            "mean_cost": [100.0],
+            "regret_vs_perfect": [100.0],
+            "cost_increase_vs_best_pct": [0.0],
+        }
+    )
+    quantile = pd.DataFrame(
+        {
+            "scenario": ["symmetric"],
+            "shortage_cost": [1.0],
+            "surplus_cost": [1.0],
+            "selected_quantile": [0.5],
+            "p50_cost": [100.0],
+            "cost_aware_quantile_cost": [100.0],
+            "cost_savings_pct": [0.0],
+        }
+    )
+    point_path = tmp_path / "benchmark" / "decision_costs.csv"
+    quantile_path = tmp_path / "probabilistic" / "decision_costs.csv"
+    point_path.parent.mkdir()
+    quantile_path.parent.mkdir()
+    point.to_csv(point_path, index=False)
+    quantile.to_csv(quantile_path, index=False)
+
+    monkeypatch.setattr("gridcast.api_service.POINT_DECISIONS_PATH", point_path)
+    monkeypatch.setattr("gridcast.api_service.QUANTILE_DECISIONS_PATH", quantile_path)
+
+    response = await client.get("/api/v1/decisions")
+
+    assert response.status_code == 200
+    assert response.json()["point_models"][0]["model"] == "lightgbm"

@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, VALIDATION_SPLIT, Col
+from gridcast.decision import evaluate_quantile_decisions
 from gridcast.features import EXOGENOUS_WARMUP_HOURS, build_exogenous_features
 from gridcast.metrics import (
     interval_coverage,
@@ -18,6 +19,7 @@ from gridcast.metrics import (
 )
 from gridcast.models import LightGBMQuantileForecaster
 from gridcast.pjm import validate_hourly_load
+from gridcast.provenance import build_experiment_manifest, write_manifest
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # noqa: E402
@@ -38,8 +40,8 @@ class ProbabilisticConfig:
         Hours forecast by each weekly fold.
     validation_folds : int, default=12
         Folds used exclusively to estimate conformal correction.
-    test_folds : int, default=52
-        Frozen folds used for final probabilistic evaluation.
+    holdout_folds : int, default=52
+        Historical holdout folds used for probabilistic evaluation.
     max_train_hours : int, default=43800
         Most recent training history retained for each model.
     n_estimators : int, default=300
@@ -50,14 +52,14 @@ class ProbabilisticConfig:
 
     horizon: int = 24 * 7
     validation_folds: int = 12
-    test_folds: int = 52
+    holdout_folds: int = 52
     max_train_hours: int = 24 * 365 * 5
     n_estimators: int = 300
     rolling_window_folds: int = 12
 
     def __post_init__(self) -> None:
         """Validate probabilistic experiment sizes."""
-        if min(self.horizon, self.validation_folds, self.test_folds) < 1:
+        if min(self.horizon, self.validation_folds, self.holdout_folds) < 1:
             msg = "horizon and fold counts must be positive"
             raise ValueError(msg)
         if self.horizon > 24 * 7:
@@ -195,28 +197,28 @@ def hourly_conformal_corrections(
 
 def rolling_conformal_corrections(
     validation: pd.DataFrame,
-    test: pd.DataFrame,
+    holdout: pd.DataFrame,
     window_folds: int,
 ) -> dict[int, float]:
-    """Estimate causal rolling corrections for successive test folds.
+    """Estimate causal rolling corrections for successive holdout folds.
 
     Each test fold is calibrated from the latest completed weekly folds. The
-    first test fold uses validation only; after evaluation, each completed test
+    first holdout fold uses validation only; each completed holdout
     fold enters the history available to later folds.
 
     Parameters
     ----------
     validation : pandas.DataFrame
         Chronological validation forecasts.
-    test : pandas.DataFrame
-        Chronological test forecasts.
+    holdout : pandas.DataFrame
+        Chronological historical holdout forecasts.
     window_folds : int
         Maximum completed weekly folds retained for calibration.
 
     Returns
     -------
     dict
-        Symmetric correction in megawatts keyed by test fold.
+        Symmetric correction in megawatts keyed by holdout fold.
     """
     if window_folds < 1:
         msg = "window_folds must be positive"
@@ -231,7 +233,7 @@ def rolling_conformal_corrections(
         msg = "rolling calibration requires validation folds"
         raise ValueError(msg)
     corrections: dict[int, float] = {}
-    for fold, group in test.sort_values(Col.TIMESTAMP).groupby(Col.FOLD, sort=True):
+    for fold, group in holdout.sort_values(Col.TIMESTAMP).groupby(Col.FOLD, sort=True):
         calibration = pd.concat(history[-window_folds:], ignore_index=True)
         corrections[int(str(fold))] = conformal_correction(
             calibration[Col.TARGET].to_numpy(dtype=np.float64),
@@ -251,7 +253,7 @@ def run_probabilistic_benchmark(
 
     Validation predictions are generated first and are the only observations
     used to estimate the conformal correction. That frozen correction is then
-    applied to all final test folds.
+    applied to all historical holdout folds.
 
     Parameters
     ----------
@@ -272,7 +274,7 @@ def run_probabilistic_benchmark(
         config = ProbabilisticConfig()
     required_hours = (
         EXOGENOUS_WARMUP_HOURS
-        + (config.validation_folds + config.test_folds) * config.horizon
+        + (config.validation_folds + config.holdout_folds) * config.horizon
     )
     if len(data) < required_hours:
         msg = f"probabilistic benchmark requires at least {required_hours} hours"
@@ -280,14 +282,14 @@ def run_probabilistic_benchmark(
 
     features = build_exogenous_features(data, weather)
     target = data[Col.TARGET].astype(float)
-    test_start = len(data) - config.test_folds * config.horizon
-    validation_start = test_start - config.validation_folds * config.horizon
+    holdout_start = len(data) - config.holdout_folds * config.horizon
+    validation_start = holdout_start - config.validation_folds * config.horizon
     validation = _forecast_origins(
         data,
         features,
         target,
-        range(validation_start, test_start, config.horizon),
-        "validation",
+        range(validation_start, holdout_start, config.horizon),
+        VALIDATION_SPLIT,
         config,
     )
     correction = conformal_correction(
@@ -296,18 +298,18 @@ def run_probabilistic_benchmark(
         validation[Col.P90].to_numpy(dtype=np.float64),
     )
     hourly_corrections = hourly_conformal_corrections(validation)
-    test = _forecast_origins(
+    holdout = _forecast_origins(
         data,
         features,
         target,
-        range(test_start, len(data), config.horizon),
-        "test",
+        range(holdout_start, len(data), config.horizon),
+        HISTORICAL_HOLDOUT_SPLIT,
         config,
     )
     rolling_corrections = rolling_conformal_corrections(
-        validation, test, config.rolling_window_folds
+        validation, holdout, config.rolling_window_folds
     )
-    forecasts = pd.concat([validation, test], ignore_index=True)
+    forecasts = pd.concat([validation, holdout], ignore_index=True)
     forecasts[Col.P10_CALIBRATED] = forecasts[Col.P10] - correction
     forecasts[Col.P90_CALIBRATED] = forecasts[Col.P90] + correction
     row_corrections = forecasts[Col.TIMESTAMP].dt.hour.map(hourly_corrections)
@@ -318,10 +320,10 @@ def run_probabilistic_benchmark(
         index=forecasts.index,
         dtype=float,
     )
-    test_mask = forecasts[Col.SPLIT].eq("test")
-    rolling_row_corrections.loc[test_mask] = forecasts.loc[test_mask, Col.FOLD].map(
-        rolling_corrections
-    )
+    holdout_mask = forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    rolling_row_corrections.loc[holdout_mask] = forecasts.loc[
+        holdout_mask, Col.FOLD
+    ].map(rolling_corrections)
     forecasts[Col.P10_ROLLING_CALIBRATED] = forecasts[Col.P10] - rolling_row_corrections
     forecasts[Col.P90_ROLLING_CALIBRATED] = forecasts[Col.P90] + rolling_row_corrections
     metrics = _probabilistic_metrics(forecasts)
@@ -338,6 +340,8 @@ def write_probabilistic_artifacts(
     result: ProbabilisticResult,
     config: ProbabilisticConfig,
     output_dir: Path,
+    data: pd.DataFrame | None = None,
+    weather: pd.DataFrame | None = None,
 ) -> None:
     """Persist probabilistic forecasts, metrics, metadata, and charts.
 
@@ -359,13 +363,17 @@ def write_probabilistic_artifacts(
     hourly_metrics.to_csv(output_dir / "hourly_coverage.csv", index=False)
     weekly_metrics = _weekly_coverage_metrics(result.forecasts)
     weekly_metrics.to_csv(output_dir / "weekly_coverage.csv", index=False)
+    decision_metrics = evaluate_quantile_decisions(result.forecasts)
+    decision_metrics.to_csv(output_dir / "decision_costs.csv", index=False)
     pd.DataFrame(
         [
             {Col.FOLD: fold, "rolling_correction_mw": correction}
             for fold, correction in result.rolling_corrections_mw.items()
         ]
     ).to_csv(output_dir / "rolling_corrections.csv", index=False)
-    test_metrics = result.metrics.loc[result.metrics[Col.SPLIT].eq("test")].iloc[0]
+    holdout_metrics = result.metrics.loc[
+        result.metrics[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    ].iloc[0]
     metadata = {
         "config": asdict(config),
         "quantiles": [LOWER_QUANTILE, MEDIAN_QUANTILE, UPPER_QUANTILE],
@@ -379,8 +387,8 @@ def write_probabilistic_artifacts(
             str(fold): correction
             for fold, correction in result.rolling_corrections_mw.items()
         },
-        "test": {
-            key: float(test_metrics[key])
+        "historical_holdout": {
+            key: float(holdout_metrics[key])
             for key in [
                 "p10_pinball_loss",
                 "p50_pinball_loss",
@@ -404,7 +412,34 @@ def write_probabilistic_artifacts(
     (output_dir / "summary.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
     )
-    _plot_latest_interval(result.forecasts, output_dir / "latest_test_interval.png")
+    if data is not None and weather is not None:
+        write_manifest(
+            build_experiment_manifest(
+                "pjme-probabilistic-benchmark",
+                asdict(config),
+                {"load": data, "weather": weather},
+                features=list(build_exogenous_features(data, weather).columns),
+                boundaries={
+                    "validation_start": validation[Col.TIMESTAMP].min().isoformat()
+                    if (
+                        validation := result.forecasts.loc[
+                            result.forecasts[Col.SPLIT].eq(VALIDATION_SPLIT)
+                        ]
+                    ).shape[0]
+                    else "",
+                    "holdout_start": holdout[Col.TIMESTAMP].min().isoformat()
+                    if (
+                        holdout := result.forecasts.loc[
+                            result.forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+                        ]
+                    ).shape[0]
+                    else "",
+                    "holdout_end": holdout[Col.TIMESTAMP].max().isoformat(),
+                },
+            ),
+            output_dir / "experiment_manifest.json",
+        )
+    _plot_latest_interval(result.forecasts, output_dir / "latest_holdout_interval.png")
     _plot_calibration(result.metrics, output_dir / "coverage.png")
     _plot_hourly_coverage(hourly_metrics, output_dir / "hourly_coverage.png")
 
@@ -453,7 +488,7 @@ def _forecast_origins(
 
 def _probabilistic_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, float | int | str]] = []
-    for split in ["validation", "test"]:
+    for split in [VALIDATION_SPLIT, HISTORICAL_HOLDOUT_SPLIT]:
         group = forecasts.loc[forecasts[Col.SPLIT].eq(split)]
         actual = cast(NDArray[np.float64], group[Col.TARGET].to_numpy(dtype=np.float64))
         p10 = cast(NDArray[np.float64], group[Col.P10].to_numpy(dtype=np.float64))
@@ -594,8 +629,8 @@ def _weekly_coverage_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
 
 
 def _plot_latest_interval(forecasts: pd.DataFrame, output_path: Path) -> None:
-    test = forecasts.loc[forecasts[Col.SPLIT].eq("test")]
-    latest = test.loc[test[Col.FOLD].eq(test[Col.FOLD].max())]
+    holdout = forecasts.loc[forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)]
+    latest = holdout.loc[holdout[Col.FOLD].eq(holdout[Col.FOLD].max())]
     figure, axis = plt.subplots(figsize=(14, 5))
     timestamps = latest[Col.TIMESTAMP]
     axis.fill_between(
@@ -609,7 +644,8 @@ def _plot_latest_interval(forecasts: pd.DataFrame, output_path: Path) -> None:
     axis.plot(timestamps, latest[Col.TARGET], color="#001524", label="actual")
     axis.plot(timestamps, latest[Col.P50], color="#15616d", label="P50")
     axis.set(
-        title="Latest frozen test week with calibrated interval", ylabel="Load (MW)"
+        title="Latest historical holdout week with calibrated interval",
+        ylabel="Load (MW)",
     )
     axis.legend()
     axis.grid(alpha=0.2)
@@ -619,22 +655,26 @@ def _plot_latest_interval(forecasts: pd.DataFrame, output_path: Path) -> None:
 
 
 def _plot_calibration(metrics: pd.DataFrame, output_path: Path) -> None:
-    test = metrics.loc[metrics[Col.SPLIT].eq("test")].iloc[0]
+    holdout = metrics.loc[metrics[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)].iloc[0]
     figure, axis = plt.subplots(figsize=(7, 5))
     labels = ["Target", "Raw", "Global", "Hourly", "Rolling"]
     values = [
         TARGET_COVERAGE,
-        test["raw_coverage"],
-        test["calibrated_coverage"],
-        test["hourly_calibrated_coverage"],
-        test["rolling_calibrated_coverage"],
+        holdout["raw_coverage"],
+        holdout["calibrated_coverage"],
+        holdout["hourly_calibrated_coverage"],
+        holdout["rolling_calibrated_coverage"],
     ]
     axis.bar(
         labels,
         values,
         color=["#ff7d00", "#7bdff2", "#15616d", "#5969a6", "#9a6fb0"],
     )
-    axis.set(title="Frozen test interval coverage", ylabel="Coverage", ylim=(0.0, 1.0))
+    axis.set(
+        title="Historical holdout interval coverage",
+        ylabel="Coverage",
+        ylim=(0.0, 1.0),
+    )
     axis.grid(axis="y", alpha=0.2)
     figure.tight_layout()
     figure.savefig(output_path, dpi=160)
@@ -642,13 +682,13 @@ def _plot_calibration(metrics: pd.DataFrame, output_path: Path) -> None:
 
 
 def _plot_hourly_coverage(metrics: pd.DataFrame, output_path: Path) -> None:
-    test = metrics.loc[metrics[Col.SPLIT].eq("test")]
+    holdout = metrics.loc[metrics[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)]
     figure, axis = plt.subplots(figsize=(12, 5))
     axis.axhline(TARGET_COVERAGE, color="#ff7d00", label="target", linewidth=2)
-    axis.plot(test[Col.HOUR], test["global_coverage"], label="global conformal")
-    axis.plot(test[Col.HOUR], test["hourly_coverage"], label="hourly conformal")
+    axis.plot(holdout[Col.HOUR], holdout["global_coverage"], label="global conformal")
+    axis.plot(holdout[Col.HOUR], holdout["hourly_coverage"], label="hourly conformal")
     axis.set(
-        title="Frozen test coverage by hour",
+        title="Historical holdout coverage by hour",
         xlabel="Hour",
         ylabel="Coverage",
         ylim=(0.0, 1.0),

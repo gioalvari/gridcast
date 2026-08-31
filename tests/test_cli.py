@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from gridcast.cli import main
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, VALIDATION_SPLIT, Col
 from gridcast.data import generate_synthetic_load
 
 
@@ -71,7 +71,7 @@ def test_benchmark_command_writes_leaderboard(tmp_path: Path) -> None:
             str(output_path),
             "--validation-folds",
             "1",
-            "--test-folds",
+            "--holdout-folds",
             "1",
             "--max-train-hours",
             str(24 * 21),
@@ -83,7 +83,10 @@ def test_benchmark_command_writes_leaderboard(tmp_path: Path) -> None:
 
     assert exit_status == 0
     leaderboard = pd.read_csv(output_path / "leaderboard.csv")
-    assert set(leaderboard["split"]) == {"validation", "test"}
+    assert set(leaderboard["split"]) == {
+        VALIDATION_SPLIT,
+        HISTORICAL_HOLDOUT_SPLIT,
+    }
 
 
 def test_probabilistic_command_writes_calibrated_metrics(tmp_path: Path) -> None:
@@ -107,7 +110,7 @@ def test_probabilistic_command_writes_calibrated_metrics(tmp_path: Path) -> None
             str(output_path),
             "--validation-folds",
             "1",
-            "--test-folds",
+            "--holdout-folds",
             "1",
             "--max-train-hours",
             str(24 * 380),
@@ -118,7 +121,10 @@ def test_probabilistic_command_writes_calibrated_metrics(tmp_path: Path) -> None
 
     assert exit_status == 0
     metrics = pd.read_csv(output_path / "metrics.csv")
-    assert set(metrics["split"]) == {"validation", "test"}
+    assert set(metrics["split"]) == {
+        VALIDATION_SPLIT,
+        HISTORICAL_HOLDOUT_SPLIT,
+    }
     assert metrics["calibrated_coverage"].between(0.0, 1.0).all()
 
 

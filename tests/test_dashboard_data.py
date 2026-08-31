@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import (
     DashboardPaths,
     MissingArtifactsError,
@@ -21,7 +21,7 @@ def _write_dashboard_artifacts(root: Path) -> DashboardPaths:
     history = pd.DataFrame({Col.TIMESTAMP: timestamps, Col.TARGET: [10, 20, 30, 40]})
     leaderboard = pd.DataFrame(
         {
-            Col.SPLIT: ["test"],
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT],
             Col.MODEL: ["lightgbm"],
             "mae": [1.0],
             "rmse": [2.0],
@@ -34,14 +34,14 @@ def _write_dashboard_artifacts(root: Path) -> DashboardPaths:
             Col.TARGET: [10, 20, 30, 40] * 2,
             Col.PREDICTION: [11, 19, 31, 39] * 2,
             Col.MODEL: ["lightgbm"] * 4 + ["seasonal_naive_24h"] * 4,
-            Col.SPLIT: ["test"] * 8,
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT] * 8,
             Col.FOLD: [1] * 8,
         }
     )
     fold_metrics = pd.DataFrame(
         {
             Col.MODEL: ["lightgbm"],
-            Col.SPLIT: ["test"],
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT],
             Col.FOLD: [1],
             "mae": [1.0],
         }
@@ -59,13 +59,13 @@ def _write_dashboard_artifacts(root: Path) -> DashboardPaths:
             Col.P90_HOURLY_CALIBRATED: [14, 24, 34, 44],
             Col.P10_ROLLING_CALIBRATED: [5, 15, 25, 35],
             Col.P90_ROLLING_CALIBRATED: [15, 25, 35, 45],
-            Col.SPLIT: ["test"] * 4,
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT] * 4,
             Col.FOLD: [1] * 4,
         }
     )
     probabilistic_metrics = pd.DataFrame(
         {
-            Col.SPLIT: ["test"],
+            Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT],
             "raw_coverage": [0.5],
             "calibrated_coverage": [0.8],
             "hourly_calibrated_coverage": [0.8],
@@ -97,7 +97,7 @@ def _write_dashboard_artifacts(root: Path) -> DashboardPaths:
         encoding="utf-8",
     )
     paths.probabilistic_summary.write_text(
-        json.dumps({"conformal_correction_mw": 5, "test": {}}),
+        json.dumps({"conformal_correction_mw": 5, "historical_holdout": {}}),
         encoding="utf-8",
     )
     return paths
@@ -128,8 +128,12 @@ def test_dashboard_transformations_select_expected_rows(tmp_path: Path) -> None:
     data = load_dashboard_data(_write_dashboard_artifacts(tmp_path))
 
     daily = daily_history(data.history)
-    point = benchmark_week(data.benchmark_forecasts, "test", 1, ["lightgbm"])
-    probabilistic = probabilistic_week(data.probabilistic_forecasts, "test", 1)
+    point = benchmark_week(
+        data.benchmark_forecasts, HISTORICAL_HOLDOUT_SPLIT, 1, ["lightgbm"]
+    )
+    probabilistic = probabilistic_week(
+        data.probabilistic_forecasts, HISTORICAL_HOLDOUT_SPLIT, 1
+    )
 
     assert len(daily) == 1
     assert daily["mean_load_mw"].iloc[0] == pytest.approx(25.0)

@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import (
     DashboardData,
     MissingArtifactsError,
@@ -90,14 +90,16 @@ def _render_overview(data: DashboardData) -> None:
     load_summary = summary.get("load_mw", {})
     if not isinstance(load_summary, dict):
         load_summary = {}
-    test_board = data.leaderboard.loc[data.leaderboard[Col.SPLIT].eq("test")]
-    winner = test_board.sort_values("mae").iloc[0]
+    holdout_board = data.leaderboard.loc[
+        data.leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    ]
+    winner = holdout_board.sort_values("mae").iloc[0]
     probabilistic = data.probabilistic_metrics.loc[
-        data.probabilistic_metrics[Col.SPLIT].eq("test")
+        data.probabilistic_metrics[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
     ].iloc[0]
 
     st.markdown("## System pulse")
-    st.caption("Headline results from the frozen 52-week test period.")
+    st.caption("Headline results from the 52-week historical holdout.")
     metric_columns = st.columns(4)
     metric_columns[0].metric(
         "Hourly observations",
@@ -170,23 +172,23 @@ def _render_overview(data: DashboardData) -> None:
 
 
 def _render_leaderboard(leaderboard: pd.DataFrame) -> None:
-    test = leaderboard.loc[leaderboard[Col.SPLIT].eq("test")].sort_values(
-        "mae", ascending=True
-    )
-    labels = [display_model(str(model)) for model in test[Col.MODEL]]
-    colors = [MODEL_COLORS.get(str(model), MUTED) for model in test[Col.MODEL]]
+    holdout = leaderboard.loc[
+        leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    ].sort_values("mae", ascending=True)
+    labels = [display_model(str(model)) for model in holdout[Col.MODEL]]
+    colors = [MODEL_COLORS.get(str(model), MUTED) for model in holdout[Col.MODEL]]
     chart = go.Figure(
         go.Bar(
-            x=test["mae"],
+            x=holdout["mae"],
             y=labels,
             orientation="h",
             marker_color=colors,
-            text=[f"{value:,.0f}" for value in test["mae"]],
+            text=[f"{value:,.0f}" for value in holdout["mae"]],
             textposition="outside",
             hovertemplate="%{y}<br>MAE %{x:,.0f} MW<extra></extra>",
         )
     )
-    chart.update_layout(title="Frozen-test model ranking", showlegend=False)
+    chart.update_layout(title="Historical holdout model ranking", showlegend=False)
     chart.update_xaxes(title="MAE (MW)")
     chart.update_yaxes(autorange="reversed")
     st.plotly_chart(
@@ -199,10 +201,12 @@ def _render_leaderboard(leaderboard: pd.DataFrame) -> None:
 def _render_point_forecasts(data: DashboardData) -> None:
     st.markdown("## Point forecast laboratory")
     st.caption(
-        "Inspect any frozen weekly fold and compare models against the same actual load."
+        "Inspect any holdout week and compare models against the same actual load."
     )
-    test = data.benchmark_forecasts.loc[data.benchmark_forecasts[Col.SPLIT].eq("test")]
-    available_models = list(dict.fromkeys(test[Col.MODEL].astype(str)))
+    holdout = data.benchmark_forecasts.loc[
+        data.benchmark_forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    ]
+    available_models = list(dict.fromkeys(holdout[Col.MODEL].astype(str)))
     default_models = [
         model
         for model in [
@@ -214,8 +218,8 @@ def _render_point_forecasts(data: DashboardData) -> None:
     ]
     controls = st.columns([1, 2.2])
     fold = controls[0].selectbox(
-        "Test week",
-        options=sorted(test[Col.FOLD].unique(), reverse=True),
+        "Holdout week",
+        options=sorted(holdout[Col.FOLD].unique(), reverse=True),
         format_func=lambda value: f"Week {value}",
     )
     models = controls[1].multiselect(
@@ -227,7 +231,12 @@ def _render_point_forecasts(data: DashboardData) -> None:
     if not models:
         st.info("Select at least one model to draw the forecast comparison.")
         return
-    week = benchmark_week(data.benchmark_forecasts, "test", int(fold), models)
+    week = benchmark_week(
+        data.benchmark_forecasts,
+        HISTORICAL_HOLDOUT_SPLIT,
+        int(fold),
+        models,
+    )
     actual = week.drop_duplicates(Col.TIMESTAMP)
     chart = go.Figure()
     chart.add_trace(
@@ -250,7 +259,7 @@ def _render_point_forecasts(data: DashboardData) -> None:
                 line=dict(color=MODEL_COLORS.get(model_name, MUTED), width=2),
             )
         )
-    chart.update_layout(title=f"Frozen test week {fold}")
+    chart.update_layout(title=f"Historical holdout week {fold}")
     chart.update_yaxes(title="Load (MW)")
     st.plotly_chart(
         _chart_layout(chart, 520),
@@ -259,7 +268,7 @@ def _render_point_forecasts(data: DashboardData) -> None:
     )
 
     fold_metrics = data.benchmark_fold_metrics.loc[
-        data.benchmark_fold_metrics[Col.SPLIT].eq("test")
+        data.benchmark_fold_metrics[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
         & data.benchmark_fold_metrics[Col.FOLD].eq(fold)
         & data.benchmark_fold_metrics[Col.MODEL].isin(models)
     ].copy()
@@ -277,14 +286,14 @@ def _render_point_forecasts(data: DashboardData) -> None:
 def _render_uncertainty(data: DashboardData) -> None:
     st.markdown("## Uncertainty, made accountable")
     st.caption(
-        "P10–P90 intervals are calibrated on validation only, then frozen for test."
+        "P10–P90 intervals are calibrated on validation only, then fixed for the holdout."
     )
-    test = data.probabilistic_forecasts.loc[
-        data.probabilistic_forecasts[Col.SPLIT].eq("test")
+    holdout = data.probabilistic_forecasts.loc[
+        data.probabilistic_forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
     ]
     fold = st.selectbox(
-        "Test week",
-        options=sorted(test[Col.FOLD].unique(), reverse=True),
+        "Holdout week",
+        options=sorted(holdout[Col.FOLD].unique(), reverse=True),
         format_func=lambda value: f"Week {value}",
         key="probabilistic_fold",
     )
@@ -293,7 +302,9 @@ def _render_uncertainty(data: DashboardData) -> None:
         options=["Hourly", "Global", "Rolling prequential"],
         horizontal=True,
     )
-    week = probabilistic_week(data.probabilistic_forecasts, "test", int(fold))
+    week = probabilistic_week(
+        data.probabilistic_forecasts, HISTORICAL_HOLDOUT_SPLIT, int(fold)
+    )
     interval_columns = {
         "Hourly": (Col.P10_HOURLY_CALIBRATED, Col.P90_HOURLY_CALIBRATED),
         "Global": (Col.P10_CALIBRATED, Col.P90_CALIBRATED),
@@ -344,7 +355,7 @@ def _render_uncertainty(data: DashboardData) -> None:
         )
     )
     chart.update_layout(
-        title=f"{calibration} calibrated interval · frozen test week {fold}"
+        title=f"{calibration} calibrated interval · historical holdout week {fold}"
     )
     chart.update_yaxes(title="Load (MW)")
     st.plotly_chart(
@@ -354,9 +365,9 @@ def _render_uncertainty(data: DashboardData) -> None:
     )
 
     metrics = data.probabilistic_metrics.loc[
-        data.probabilistic_metrics[Col.SPLIT].eq("test")
+        data.probabilistic_metrics[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
     ].iloc[0]
-    summary_test = data.probabilistic_summary.get("test", {})
+    summary_holdout = data.probabilistic_summary.get("historical_holdout", {})
     correction = _as_float(data.probabilistic_summary.get("conformal_correction_mw", 0))
     columns = st.columns(4)
     columns[0].metric("Raw coverage", f"{float(metrics['raw_coverage']):.1%}")
@@ -373,16 +384,16 @@ def _render_uncertainty(data: DashboardData) -> None:
     )
     columns[3].metric("Correction / bound", _format_mw(correction))
 
-    if isinstance(summary_test, dict):
+    if isinstance(summary_holdout, dict):
         coverage = go.Figure(
             go.Bar(
                 x=["Target", "Raw", "Global", "Hourly", "Rolling"],
                 y=[
                     0.8,
-                    _as_float(summary_test.get("raw_coverage", 0)),
-                    _as_float(summary_test.get("calibrated_coverage", 0)),
-                    _as_float(summary_test.get("hourly_calibrated_coverage", 0)),
-                    _as_float(summary_test.get("rolling_calibrated_coverage", 0)),
+                    _as_float(summary_holdout.get("raw_coverage", 0)),
+                    _as_float(summary_holdout.get("calibrated_coverage", 0)),
+                    _as_float(summary_holdout.get("hourly_calibrated_coverage", 0)),
+                    _as_float(summary_holdout.get("rolling_calibrated_coverage", 0)),
                 ],
                 marker_color=[ORANGE, "#9ADBE5", CYAN, "#5969A6", "#9A6FB0"],
                 texttemplate="%{y:.1%}",
@@ -407,7 +418,7 @@ def _render_methodology() -> None:
           <article><span>01</span><h3>Chronological only</h3><p>No random split. Every forecast is strictly later than its training cutoff.</p></article>
           <article><span>02</span><h3>Frozen final year</h3><p>Fifty-two weekly folds cover every season and remain separate from validation.</p></article>
           <article><span>03</span><h3>Weather without hindsight</h3><p>ERA5 enters through 168/336-hour lags and prior-year climatology, never realized future values.</p></article>
-          <article><span>04</span><h3>Validation-only calibration</h3><p>The conformal correction is learned on 12 validation folds before final test evaluation.</p></article>
+          <article><span>04</span><h3>Validation-only calibration</h3><p>The static conformal correction is learned on 12 validation folds before historical holdout evaluation.</p></article>
         </div>
         """,
         unsafe_allow_html=True,
@@ -473,6 +484,51 @@ def _render_performance() -> None:
         ],
         hide_index=True,
         width="stretch",
+    )
+
+
+def _render_decisions() -> None:
+    st.markdown("## Decisions, not only errors")
+    st.caption(
+        "Synthetic shortage/surplus penalties test whether model rankings survive operational objectives."
+    )
+    point_path = Path("artifacts/benchmark/decision_costs.csv")
+    quantile_path = Path("artifacts/probabilistic/decision_costs.csv")
+    if not point_path.exists() or not quantile_path.exists():
+        st.info("Run `make benchmark probabilistic` to generate decision results.")
+        return
+    point = pd.read_csv(point_path)
+    quantile = pd.read_csv(quantile_path)
+    winners = point.sort_values("mean_cost").groupby("scenario", as_index=False).first()
+    winners["Model"] = winners[Col.MODEL].map(display_model)
+    winners["Scenario"] = winners["scenario"].str.replace("_", " ").str.title()
+    winners["Mean cost"] = winners["mean_cost"].round(2)
+    st.dataframe(
+        winners[["Scenario", "Model", "Mean cost"]],
+        hide_index=True,
+        width="stretch",
+    )
+    chart = go.Figure(
+        go.Bar(
+            x=quantile["scenario"].str.replace("_", " ").str.title(),
+            y=quantile["cost_savings_pct"],
+            marker_color=[CYAN, ORANGE, "#5969A6"],
+            text=[f"{value:.1f}%" for value in quantile["cost_savings_pct"]],
+            textposition="outside",
+        )
+    )
+    chart.update_layout(
+        title="Savings from cost-aware quantile vs P50",
+        showlegend=False,
+    )
+    chart.update_yaxes(title="Synthetic cost savings (%)")
+    st.plotly_chart(
+        _chart_layout(chart, 390),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    st.warning(
+        "Sensitivity analysis only: costs are synthetic units, not realized market euros."
     )
 
 
@@ -557,13 +613,14 @@ def main() -> None:
                 "Overview",
                 "Point forecasts",
                 "Uncertainty",
+                "Decisions",
                 "Performance",
                 "Methodology",
             ],
             label_visibility="collapsed",
         )
         st.divider()
-        st.caption("FROZEN TEST")
+        st.caption("HISTORICAL HOLDOUT")
         st.markdown("**52 weekly folds**")
         st.caption("Aug 2017 → Aug 2018")
         st.divider()
@@ -574,6 +631,7 @@ def main() -> None:
         "Overview": lambda: _render_overview(data),
         "Point forecasts": lambda: _render_point_forecasts(data),
         "Uncertainty": lambda: _render_uncertainty(data),
+        "Decisions": _render_decisions,
         "Performance": _render_performance,
         "Methodology": _render_methodology,
     }

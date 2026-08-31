@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from gridcast.api_models import (
+    DecisionResponse,
     HealthResponse,
     LeaderboardEntry,
     MetadataResponse,
@@ -95,9 +96,11 @@ async def metadata(
 )
 async def leaderboard(
     service: Annotated[GridCastService, Depends(get_gridcast_service)],
-    split: Annotated[str, Query(pattern="^(validation|test)$")] = "test",
+    split: Annotated[
+        str, Query(pattern="^(validation|historical_holdout)$")
+    ] = "historical_holdout",
 ) -> list[LeaderboardEntry]:
-    """Return point-model ranking for validation or frozen test."""
+    """Return point-model ranking for validation or historical holdout."""
     return await service.leaderboard(split)
 
 
@@ -109,7 +112,9 @@ async def leaderboard(
 async def point_forecasts(
     service: Annotated[GridCastService, Depends(get_gridcast_service)],
     fold: Annotated[int, Query(ge=1)],
-    split: Annotated[str, Query(pattern="^(validation|test)$")] = "test",
+    split: Annotated[
+        str, Query(pattern="^(validation|historical_holdout)$")
+    ] = "historical_holdout",
     models: Annotated[list[str] | None, Query()] = None,
 ) -> PointForecastResponse:
     """Return actuals and selected point models for one weekly fold."""
@@ -124,7 +129,9 @@ async def point_forecasts(
 async def probabilistic_forecasts(
     service: Annotated[GridCastService, Depends(get_gridcast_service)],
     fold: Annotated[int, Query(ge=1)],
-    split: Annotated[str, Query(pattern="^(validation|test)$")] = "test",
+    split: Annotated[
+        str, Query(pattern="^(validation|historical_holdout)$")
+    ] = "historical_holdout",
 ) -> ProbabilisticForecastResponse:
     """Return raw quantiles and conformal bounds for one weekly fold."""
     return await service.probabilistic_forecasts(split, fold)
@@ -140,3 +147,15 @@ async def performance(
 ) -> PerformanceResponse:
     """Return optional local model performance measurements."""
     return await service.performance()
+
+
+@app.get(
+    "/api/v1/decisions",
+    response_model=DecisionResponse,
+    tags=["decisions"],
+)
+async def decisions(
+    service: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> DecisionResponse:
+    """Return optional synthetic decision-cost sensitivity results."""
+    return await service.decisions()

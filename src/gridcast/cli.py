@@ -11,6 +11,7 @@ from gridcast.benchmark import (
     run_pjme_benchmark,
     write_benchmark_artifacts,
 )
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT
 from gridcast.contracts import ForecastContract
 from gridcast.data import generate_synthetic_load
 from gridcast.eda import create_eda_report
@@ -121,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--without-exogenous", action="store_true")
     benchmark.add_argument("--horizon", type=int, default=24 * 7)
     benchmark.add_argument("--validation-folds", type=int, default=12)
-    benchmark.add_argument("--test-folds", type=int, default=52)
+    benchmark.add_argument("--holdout-folds", type=int, default=52)
     benchmark.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
     benchmark.add_argument("--n-estimators", type=int, default=300)
     probabilistic = subparsers.add_parser(
@@ -140,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probabilistic.add_argument("--horizon", type=int, default=24 * 7)
     probabilistic.add_argument("--validation-folds", type=int, default=12)
-    probabilistic.add_argument("--test-folds", type=int, default=52)
+    probabilistic.add_argument("--holdout-folds", type=int, default=52)
     probabilistic.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
     probabilistic.add_argument("--n-estimators", type=int, default=300)
     probabilistic.add_argument("--rolling-window-folds", type=int, default=12)
@@ -307,7 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         benchmark_config = BenchmarkConfig(
             horizon=args.horizon,
             validation_folds=args.validation_folds,
-            test_folds=args.test_folds,
+            holdout_folds=args.holdout_folds,
             max_train_hours=args.max_train_hours,
             n_estimators=args.n_estimators,
         )
@@ -317,16 +318,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 msg = f"weather data not found at {args.weather}; run `make weather`"
                 raise FileNotFoundError(msg)
             weather_data = pd.read_parquet(args.weather)
-        benchmark_result = run_pjme_benchmark(
-            pd.read_parquet(args.input), benchmark_config, weather_data
+        load_data = pd.read_parquet(args.input)
+        benchmark_result = run_pjme_benchmark(load_data, benchmark_config, weather_data)
+        write_benchmark_artifacts(
+            benchmark_result,
+            benchmark_config,
+            args.output_dir,
+            load_data,
+            weather_data,
         )
-        write_benchmark_artifacts(benchmark_result, benchmark_config, args.output_dir)
-        test_leaderboard = benchmark_result.leaderboard.loc[
-            benchmark_result.leaderboard["split"].eq("test")
+        holdout_leaderboard = benchmark_result.leaderboard.loc[
+            benchmark_result.leaderboard["split"].eq(HISTORICAL_HOLDOUT_SPLIT)
         ]
-        winner = test_leaderboard.iloc[0]
+        winner = holdout_leaderboard.iloc[0]
         LOGGER.info(
-            "Frozen test winner: %s, MAE %.2f MW, MASE %.3f",
+            "Historical holdout winner: %s, MAE %.2f MW, MASE %.3f",
             winner["model"],
             winner["mae"],
             winner["mase"],
@@ -337,28 +343,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         probabilistic_config = ProbabilisticConfig(
             horizon=args.horizon,
             validation_folds=args.validation_folds,
-            test_folds=args.test_folds,
+            holdout_folds=args.holdout_folds,
             max_train_hours=args.max_train_hours,
             n_estimators=args.n_estimators,
             rolling_window_folds=args.rolling_window_folds,
         )
+        load_data = pd.read_parquet(args.input)
+        weather_data = pd.read_parquet(args.weather)
         probabilistic_result = run_probabilistic_benchmark(
-            pd.read_parquet(args.input),
-            pd.read_parquet(args.weather),
-            probabilistic_config,
+            load_data, weather_data, probabilistic_config
         )
         write_probabilistic_artifacts(
-            probabilistic_result, probabilistic_config, args.output_dir
+            probabilistic_result,
+            probabilistic_config,
+            args.output_dir,
+            load_data,
+            weather_data,
         )
-        test_metrics = probabilistic_result.metrics.loc[
-            probabilistic_result.metrics["split"].eq("test")
+        holdout_metrics = probabilistic_result.metrics.loc[
+            probabilistic_result.metrics["split"].eq(HISTORICAL_HOLDOUT_SPLIT)
         ].iloc[0]
         LOGGER.info(
-            "Probabilistic test: raw %.3f, global %.3f, hourly %.3f, rolling %.3f",
-            test_metrics["raw_coverage"],
-            test_metrics["calibrated_coverage"],
-            test_metrics["hourly_calibrated_coverage"],
-            test_metrics["rolling_calibrated_coverage"],
+            "Historical holdout: raw %.3f, global %.3f, hourly %.3f, rolling %.3f",
+            holdout_metrics["raw_coverage"],
+            holdout_metrics["calibrated_coverage"],
+            holdout_metrics["hourly_calibrated_coverage"],
+            holdout_metrics["rolling_calibrated_coverage"],
         )
     elif args.command == "performance":
         import pandas as pd

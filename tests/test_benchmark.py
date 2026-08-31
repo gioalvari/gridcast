@@ -9,16 +9,16 @@ from gridcast.benchmark import (
     run_pjme_benchmark,
     write_benchmark_artifacts,
 )
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, VALIDATION_SPLIT, Col
 from gridcast.data import generate_synthetic_load
 
 
-def test_benchmark_separates_validation_and_test_folds(tmp_path: Path) -> None:
+def test_benchmark_separates_validation_and_holdout_folds(tmp_path: Path) -> None:
     data = generate_synthetic_load(periods=24 * 49)
     config = BenchmarkConfig(
         horizon=24 * 7,
         validation_folds=1,
-        test_folds=1,
+        holdout_folds=1,
         max_train_hours=24 * 21,
         n_estimators=5,
     )
@@ -27,22 +27,27 @@ def test_benchmark_separates_validation_and_test_folds(tmp_path: Path) -> None:
 
     models = {*BASELINE_PERIODS, LIGHTGBM_MODEL}
     assert set(result.leaderboard[Col.MODEL]) == models
-    assert set(result.leaderboard[Col.SPLIT]) == {"validation", "test"}
+    assert set(result.leaderboard[Col.SPLIT]) == {
+        VALIDATION_SPLIT,
+        HISTORICAL_HOLDOUT_SPLIT,
+    }
     assert len(result.forecasts) == 2 * len(models) * config.horizon
     assert (result.forecasts[Col.TIMESTAMP] > result.forecasts[Col.CUTOFF]).all()
     validation_end = result.forecasts.loc[
         result.forecasts[Col.SPLIT].eq("validation"), Col.TIMESTAMP
     ].max()
-    test_start = result.forecasts.loc[
-        result.forecasts[Col.SPLIT].eq("test"), Col.TIMESTAMP
+    holdout_start = result.forecasts.loc[
+        result.forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT), Col.TIMESTAMP
     ].min()
-    assert validation_end < test_start
+    assert validation_end < holdout_start
 
     write_benchmark_artifacts(result, config, tmp_path)
     assert {path.name for path in tmp_path.iterdir()} == {
+        "decision_costs.csv",
+        "decision_costs.png",
         "fold_metrics.csv",
         "forecasts.parquet",
-        "latest_test_week.png",
+        "latest_holdout_week.png",
         "leaderboard.csv",
         "leaderboard.png",
         "summary.json",
@@ -65,7 +70,7 @@ def test_benchmark_config_and_minimum_history_are_validated() -> None:
             short,
             BenchmarkConfig(
                 validation_folds=1,
-                test_folds=1,
+                holdout_folds=1,
                 max_train_hours=24 * 15,
                 n_estimators=2,
             ),
@@ -77,7 +82,7 @@ def test_benchmark_adds_exogenous_model_when_weather_is_available() -> None:
     weather = data[[Col.TIMESTAMP]].assign(**{Col.TEMPERATURE: 10.0})
     config = BenchmarkConfig(
         validation_folds=1,
-        test_folds=1,
+        holdout_folds=1,
         max_train_hours=24 * 380,
         n_estimators=2,
     )

@@ -11,7 +11,7 @@ make benchmark
 
 - Forecast horizon: 168 hours
 - Validation: 12 weekly folds from 12 May to 4 August 2017
-- Frozen test: 52 weekly folds from 4 August 2017 to 3 August 2018
+- Historical holdout: 52 weekly folds from 4 August 2017 to 3 August 2018
 - LightGBM training history: rolling five-year window
 - LightGBM objective: L1 regression
 - Metrics: MAE, RMSE, and MASE scaled by the in-sample weekly naive error
@@ -20,10 +20,10 @@ make benchmark
 - Weather climatology: month-day-hour averages using prior years only
 - Calendar: United States federal holiday, pre-holiday, and post-holiday flags
 
-The complete frozen test covers every season. Models are retrained at each
+The complete historical holdout covers every season. Models are retrained at each
 weekly origin using only observations preceding that origin.
 
-## Frozen test results
+## Historical holdout results
 
 | Model | MAE (MW) | RMSE (MW) | MASE | MAE vs weekly naive |
 |---|---:|---:|---:|---:|
@@ -60,13 +60,13 @@ new features, but not enough to treat the current model as production-ready.
 
 ## Interpretation
 
-- Daily seasonality is more reliable than weekly seasonality over this test
+- Daily seasonality is more reliable than weekly seasonality over this holdout
   year, indicating meaningful week-to-week level changes.
 - Delayed weather and prior-year climatology provide a measurable improvement
   without exposing realized future weather.
 - Holiday flags add value only in combination with weather in this experiment.
 - All LightGBM variants still underestimate some demand peaks because they do
-  not have archived day-ahead weather forecasts for the full test period.
+  not have archived day-ahead weather forecasts for the full holdout period.
 - The small margin over daily naive and higher error variance justify adding
   exogenous features before increasing model complexity.
 

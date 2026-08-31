@@ -63,22 +63,22 @@ class ExperimentMetadata(APIModel):
         Forecast horizon in hours.
     validation_folds : int
         Number of validation folds.
-    test_folds : int
-        Number of frozen test folds.
+    holdout_folds : int
+        Number of historical holdout folds.
     validation_start : datetime
         First validation timestamp.
-    test_start : datetime
-        First frozen-test timestamp.
-    test_end : datetime
-        Last frozen-test timestamp.
+    holdout_start : datetime
+        First historical holdout timestamp.
+    holdout_end : datetime
+        Last historical holdout timestamp.
     """
 
     horizon_hours: int = Field(ge=1)
     validation_folds: int = Field(ge=1)
-    test_folds: int = Field(ge=1)
+    holdout_folds: int = Field(ge=1)
     validation_start: datetime
-    test_start: datetime
-    test_end: datetime
+    holdout_start: datetime
+    holdout_end: datetime
 
 
 class ProbabilisticMetadata(APIModel):
@@ -93,9 +93,9 @@ class ProbabilisticMetadata(APIModel):
     conformal_correction_mw : float
         Symmetric correction applied to each interval bound.
     raw_coverage : float
-        Frozen-test coverage before calibration.
+        Historical holdout coverage before calibration.
     calibrated_coverage : float
-        Frozen-test coverage after calibration.
+        Historical holdout coverage after calibration.
     hourly_calibrated_coverage : float
         Frozen-test coverage after hour-conditional calibration.
     global_hourly_coverage_mae : float
@@ -103,7 +103,7 @@ class ProbabilisticMetadata(APIModel):
     conditional_hourly_coverage_mae : float
         Mean absolute hourly deviation for hour-conditional calibration.
     rolling_calibrated_coverage : float
-        Prequential test coverage with causal rolling calibration.
+        Prequential holdout coverage with causal rolling calibration.
     global_weekly_coverage_mae : float
         Mean absolute weekly coverage deviation for static global calibration.
     rolling_weekly_coverage_mae : float
@@ -212,3 +212,37 @@ class PerformanceResponse(APIModel):
 
     environment: dict[str, str | int]
     measurements: list[PerformanceMeasurement]
+
+
+class PointDecisionResult(APIModel):
+    """Point-model result under one synthetic decision scenario."""
+
+    scenario: str
+    model: str
+    shortage_cost: float = Field(ge=0.0)
+    surplus_cost: float = Field(ge=0.0)
+    optimal_quantile: float = Field(ge=0.0, le=1.0)
+    folds: int = Field(ge=1)
+    observations: int = Field(ge=1)
+    mean_cost: float = Field(ge=0.0)
+    regret_vs_perfect: float = Field(ge=0.0)
+    cost_increase_vs_best_pct: float = Field(ge=0.0)
+
+
+class QuantileDecisionResult(APIModel):
+    """Cost-aware quantile result under one synthetic decision scenario."""
+
+    scenario: str
+    shortage_cost: float = Field(ge=0.0)
+    surplus_cost: float = Field(ge=0.0)
+    selected_quantile: float = Field(ge=0.0, le=1.0)
+    p50_cost: float = Field(ge=0.0)
+    cost_aware_quantile_cost: float = Field(ge=0.0)
+    cost_savings_pct: float
+
+
+class DecisionResponse(APIModel):
+    """Point-model and probabilistic scheduling sensitivity results."""
+
+    point_models: list[PointDecisionResult]
+    quantile_schedules: list[QuantileDecisionResult]

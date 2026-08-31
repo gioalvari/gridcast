@@ -1,5 +1,8 @@
 from enum import StrEnum
 
+VALIDATION_SPLIT = "validation"
+HISTORICAL_HOLDOUT_SPLIT = "historical_holdout"
+
 
 class Col(StrEnum):
     """Canonical column names used by GridCast datasets and artifacts."""

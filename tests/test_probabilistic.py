@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, VALIDATION_SPLIT, Col
 from gridcast.data import generate_synthetic_load
 from gridcast.probabilistic import (
     ProbabilisticConfig,
@@ -98,14 +98,17 @@ def test_probabilistic_benchmark_separates_calibration_and_test(
     )
     config = ProbabilisticConfig(
         validation_folds=1,
-        test_folds=1,
+        holdout_folds=1,
         max_train_hours=24 * 380,
         n_estimators=3,
     )
 
     result = run_probabilistic_benchmark(data, weather, config)
 
-    assert set(result.forecasts[Col.SPLIT]) == {"validation", "test"}
+    assert set(result.forecasts[Col.SPLIT]) == {
+        VALIDATION_SPLIT,
+        HISTORICAL_HOLDOUT_SPLIT,
+    }
     assert (result.forecasts[Col.P10] <= result.forecasts[Col.P50]).all()
     assert (result.forecasts[Col.P50] <= result.forecasts[Col.P90]).all()
     assert (result.forecasts[Col.P10_CALIBRATED] <= result.forecasts[Col.P10]).all()
@@ -120,10 +123,11 @@ def test_probabilistic_benchmark_separates_calibration_and_test(
     write_probabilistic_artifacts(result, config, tmp_path)
     assert {path.name for path in tmp_path.iterdir()} == {
         "coverage.png",
+        "decision_costs.csv",
         "forecasts.parquet",
         "hourly_coverage.csv",
         "hourly_coverage.png",
-        "latest_test_interval.png",
+        "latest_holdout_interval.png",
         "metrics.csv",
         "rolling_corrections.csv",
         "summary.json",
@@ -133,7 +137,7 @@ def test_probabilistic_benchmark_separates_calibration_and_test(
 
 def test_probabilistic_config_and_history_are_validated() -> None:
     with pytest.raises(ValueError, match="positive"):
-        ProbabilisticConfig(test_folds=0)
+        ProbabilisticConfig(holdout_folds=0)
     with pytest.raises(ValueError, match="cannot exceed"):
         ProbabilisticConfig(horizon=169)
     with pytest.raises(ValueError, match="warmup"):

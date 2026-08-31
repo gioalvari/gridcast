@@ -2,22 +2,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+import pandas as pd
+
 from gridcast.api_models import (
     DatasetMetadata,
+    DecisionResponse,
     ExperimentMetadata,
     LeaderboardEntry,
     MetadataResponse,
     PerformanceMeasurement,
     PerformanceResponse,
+    PointDecisionResult,
     PointForecast,
     PointForecastResponse,
     ProbabilisticForecast,
     ProbabilisticForecastResponse,
     ProbabilisticMetadata,
+    QuantileDecisionResult,
 )
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, benchmark_week, display_model
 from gridcast.performance import load_performance_summary
+
+POINT_DECISIONS_PATH = Path("artifacts/benchmark/decision_costs.csv")
+QUANTILE_DECISIONS_PATH = Path("artifacts/probabilistic/decision_costs.csv")
 
 
 class ForecastNotFoundError(LookupError):
@@ -56,7 +64,9 @@ class GridCastService:
         benchmark = self._benchmark_summary()
         benchmark_config = self._object_dict(benchmark.get("config"))
         probabilistic = self.data.probabilistic_summary
-        probabilistic_test = self._object_dict(probabilistic.get("test"))
+        probabilistic_holdout = self._object_dict(
+            probabilistic.get("historical_holdout")
+        )
         return MetadataResponse(
             dataset=DatasetMetadata(
                 observations=self._int(eda.get("observations")),
@@ -69,10 +79,10 @@ class GridCastService:
             experiment=ExperimentMetadata(
                 horizon_hours=self._int(benchmark_config.get("horizon")),
                 validation_folds=self._int(benchmark_config.get("validation_folds")),
-                test_folds=self._int(benchmark_config.get("test_folds")),
+                holdout_folds=self._int(benchmark_config.get("holdout_folds")),
                 validation_start=self._datetime(benchmark.get("validation_start")),
-                test_start=self._datetime(benchmark.get("test_start")),
-                test_end=self._datetime(benchmark.get("test_end")),
+                holdout_start=self._datetime(benchmark.get("holdout_start")),
+                holdout_end=self._datetime(benchmark.get("holdout_end")),
             ),
             probabilistic=ProbabilisticMetadata(
                 quantiles=[
@@ -83,27 +93,27 @@ class GridCastService:
                 conformal_correction_mw=self._float(
                     probabilistic.get("conformal_correction_mw")
                 ),
-                raw_coverage=self._float(probabilistic_test.get("raw_coverage")),
+                raw_coverage=self._float(probabilistic_holdout.get("raw_coverage")),
                 calibrated_coverage=self._float(
-                    probabilistic_test.get("calibrated_coverage")
+                    probabilistic_holdout.get("calibrated_coverage")
                 ),
                 hourly_calibrated_coverage=self._float(
-                    probabilistic_test.get("hourly_calibrated_coverage")
+                    probabilistic_holdout.get("hourly_calibrated_coverage")
                 ),
                 global_hourly_coverage_mae=self._float(
-                    probabilistic_test.get("global_hourly_coverage_mae")
+                    probabilistic_holdout.get("global_hourly_coverage_mae")
                 ),
                 conditional_hourly_coverage_mae=self._float(
-                    probabilistic_test.get("conditional_hourly_coverage_mae")
+                    probabilistic_holdout.get("conditional_hourly_coverage_mae")
                 ),
                 rolling_calibrated_coverage=self._float(
-                    probabilistic_test.get("rolling_calibrated_coverage")
+                    probabilistic_holdout.get("rolling_calibrated_coverage")
                 ),
                 global_weekly_coverage_mae=self._float(
-                    probabilistic_test.get("global_weekly_coverage_mae")
+                    probabilistic_holdout.get("global_weekly_coverage_mae")
                 ),
                 rolling_weekly_coverage_mae=self._float(
-                    probabilistic_test.get("rolling_weekly_coverage_mae")
+                    probabilistic_holdout.get("rolling_weekly_coverage_mae")
                 ),
             ),
         )
@@ -282,13 +292,38 @@ class GridCastService:
             measurements=measurements,
         )
 
+    async def decisions(self) -> DecisionResponse:
+        """Return optional synthetic scheduling-cost sensitivity results.
+
+        Returns
+        -------
+        DecisionResponse
+            Point-model and quantile scheduling results.
+        """
+        if not POINT_DECISIONS_PATH.exists() or not QUANTILE_DECISIONS_PATH.exists():
+            raise ForecastNotFoundError(
+                "decision artifacts not found; run `make benchmark probabilistic`"
+            )
+        point_data = pd.read_csv(POINT_DECISIONS_PATH)
+        quantile_data = pd.read_csv(QUANTILE_DECISIONS_PATH)
+        return DecisionResponse(
+            point_models=[
+                PointDecisionResult.model_validate(row)
+                for row in point_data.to_dict(orient="records")
+            ],
+            quantile_schedules=[
+                QuantileDecisionResult.model_validate(row)
+                for row in quantile_data.to_dict(orient="records")
+            ],
+        )
+
     def _benchmark_summary(self) -> dict[str, object]:
         summary_path = self.data.probabilistic_summary.get("benchmark_summary")
         if isinstance(summary_path, dict):
             return cast(dict[str, object], summary_path)
         config = self._object_dict(self.data.probabilistic_summary.get("config"))
-        test = self.data.benchmark_forecasts.loc[
-            self.data.benchmark_forecasts[Col.SPLIT].eq("test")
+        holdout = self.data.benchmark_forecasts.loc[
+            self.data.benchmark_forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
         ]
         validation = self.data.benchmark_forecasts.loc[
             self.data.benchmark_forecasts[Col.SPLIT].eq("validation")
@@ -296,8 +331,8 @@ class GridCastService:
         return {
             "config": config,
             "validation_start": validation[Col.TIMESTAMP].min().isoformat(),
-            "test_start": test[Col.TIMESTAMP].min().isoformat(),
-            "test_end": test[Col.TIMESTAMP].max().isoformat(),
+            "holdout_start": holdout[Col.TIMESTAMP].min().isoformat(),
+            "holdout_end": holdout[Col.TIMESTAMP].max().isoformat(),
         }
 
     @staticmethod

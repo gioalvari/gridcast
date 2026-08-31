@@ -67,7 +67,7 @@ class DashboardData:
     probabilistic_metrics : pandas.DataFrame
         Aggregate uncertainty metrics.
     probabilistic_summary : dict
-        Probabilistic configuration and headline test metrics.
+        Probabilistic configuration and headline holdout metrics.
     """
 
     history: pd.DataFrame

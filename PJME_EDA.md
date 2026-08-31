@@ -50,5 +50,5 @@ The maximum hourly load occurred at 17:00 on 2 August 2006.
   extreme peaks, motivating weather and holiday features.
 
 These observations support daily and weekly seasonal-naive baselines and the
-planned lag features at 24, 48, and 168 hours. They also show why a final test
+planned lag features at 24, 48, and 168 hours. They also show why a holdout
 period must include complete seasons rather than a short random sample.

@@ -9,7 +9,8 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from gridcast.baselines import SeasonalNaiveForecaster
-from gridcast.columns import Col
+from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, VALIDATION_SPLIT, Col
+from gridcast.decision import evaluate_decision_costs
 from gridcast.features import (
     BASE_FEATURE_COLUMNS,
     EXOGENOUS_WARMUP_HOURS,
@@ -26,6 +27,7 @@ from gridcast.metrics import (
 )
 from gridcast.models import LightGBMLoadForecaster
 from gridcast.pjm import validate_hourly_load
+from gridcast.provenance import build_experiment_manifest, write_manifest
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt  # noqa: E402
@@ -44,16 +46,16 @@ LIGHTGBM_EXOGENOUS_MODEL = "lightgbm_exogenous"
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
-    """Configuration for the PJME development and final benchmark.
+    """Configuration for the PJME development and historical benchmark.
 
     Parameters
     ----------
     horizon : int, default=168
         Hours forecast by each operational fold.
     validation_folds : int, default=12
-        Weekly folds immediately preceding the final test period.
-    test_folds : int, default=52
-        Frozen weekly folds at the end of the dataset.
+        Weekly folds immediately preceding the historical holdout.
+    holdout_folds : int, default=52
+        Historical holdout weekly folds at the end of the dataset.
     max_train_hours : int, default=43800
         Most recent training history retained for LightGBM.
     n_estimators : int, default=300
@@ -62,13 +64,13 @@ class BenchmarkConfig:
 
     horizon: int = 24 * 7
     validation_folds: int = 12
-    test_folds: int = 52
+    holdout_folds: int = 52
     max_train_hours: int = 24 * 365 * 5
     n_estimators: int = 300
 
     def __post_init__(self) -> None:
         """Validate benchmark sizes."""
-        if min(self.horizon, self.validation_folds, self.test_folds) < 1:
+        if min(self.horizon, self.validation_folds, self.holdout_folds) < 1:
             msg = "horizon and fold counts must be positive"
             raise ValueError(msg)
         if self.horizon > 24 * 7:
@@ -108,7 +110,7 @@ def run_pjme_benchmark(
 ) -> BenchmarkResult:
     """Run leakage-safe baselines and LightGBM on chronological folds.
 
-    The final ``test_folds`` are separated from the preceding validation folds.
+    The final ``holdout_folds`` follow the preceding validation folds.
     Each fold trains only on earlier rows and predicts one complete horizon.
 
     Parameters
@@ -132,7 +134,7 @@ def run_pjme_benchmark(
         EXOGENOUS_WARMUP_HOURS if weather is not None else FEATURE_WARMUP_HOURS
     )
     required_hours = (
-        warmup_hours + (config.validation_folds + config.test_folds) * config.horizon
+        warmup_hours + (config.validation_folds + config.holdout_folds) * config.horizon
     )
     if len(data) < required_hours:
         msg = f"benchmark requires at least {required_hours} hourly observations"
@@ -152,11 +154,11 @@ def run_pjme_benchmark(
             ]
         )
     target = data[Col.TARGET].astype(float)
-    test_start = len(data) - config.test_folds * config.horizon
-    validation_start = test_start - config.validation_folds * config.horizon
+    holdout_start = len(data) - config.holdout_folds * config.horizon
+    validation_start = holdout_start - config.validation_folds * config.horizon
     split_origins = {
-        "validation": range(validation_start, test_start, config.horizon),
-        "test": range(test_start, len(data), config.horizon),
+        VALIDATION_SPLIT: range(validation_start, holdout_start, config.horizon),
+        HISTORICAL_HOLDOUT_SPLIT: range(holdout_start, len(data), config.horizon),
     }
     forecast_frames: list[pd.DataFrame] = []
     metric_rows: list[dict[str, float | int | str]] = []
@@ -255,6 +257,8 @@ def write_benchmark_artifacts(
     result: BenchmarkResult,
     config: BenchmarkConfig,
     output_dir: Path,
+    data: pd.DataFrame | None = None,
+    weather: pd.DataFrame | None = None,
 ) -> None:
     """Persist benchmark tables, metadata, and diagnostic charts.
 
@@ -273,6 +277,8 @@ def write_benchmark_artifacts(
     )
     result.fold_metrics.to_csv(output_dir / "fold_metrics.csv", index=False)
     result.leaderboard.to_csv(output_dir / "leaderboard.csv", index=False)
+    decision_costs = evaluate_decision_costs(result.forecasts)
+    decision_costs.to_csv(output_dir / "decision_costs.csv", index=False)
     metadata = {
         "config": asdict(config),
         "models": result.leaderboard[Col.MODEL].drop_duplicates().tolist(),
@@ -280,17 +286,17 @@ def write_benchmark_artifacts(
             result.leaderboard[Col.MODEL].eq(LIGHTGBM_EXOGENOUS_MODEL).any()
         ),
         "validation_start": result.forecasts.loc[
-            result.forecasts[Col.SPLIT].eq("validation"), Col.TIMESTAMP
+            result.forecasts[Col.SPLIT].eq(VALIDATION_SPLIT), Col.TIMESTAMP
         ]
         .min()
         .isoformat(),
-        "test_start": result.forecasts.loc[
-            result.forecasts[Col.SPLIT].eq("test"), Col.TIMESTAMP
+        "holdout_start": result.forecasts.loc[
+            result.forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT), Col.TIMESTAMP
         ]
         .min()
         .isoformat(),
-        "test_end": result.forecasts.loc[
-            result.forecasts[Col.SPLIT].eq("test"), Col.TIMESTAMP
+        "holdout_end": result.forecasts.loc[
+            result.forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT), Col.TIMESTAMP
         ]
         .max()
         .isoformat(),
@@ -298,8 +304,32 @@ def write_benchmark_artifacts(
     (output_dir / "summary.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
     )
+    if data is not None:
+        datasets = {"load": data}
+        if weather is not None:
+            datasets["weather"] = weather
+        features = (
+            list(build_exogenous_features(data, weather).columns)
+            if weather is not None
+            else list(build_forecast_features(data).columns)
+        )
+        write_manifest(
+            build_experiment_manifest(
+                "pjme-point-benchmark",
+                asdict(config),
+                datasets,
+                features=features,
+                boundaries={
+                    "validation_start": metadata["validation_start"],
+                    "holdout_start": metadata["holdout_start"],
+                    "holdout_end": metadata["holdout_end"],
+                },
+            ),
+            output_dir / "experiment_manifest.json",
+        )
     _plot_leaderboard(result.leaderboard, output_dir / "leaderboard.png")
-    _plot_latest_test_week(result.forecasts, output_dir / "latest_test_week.png")
+    _plot_decision_costs(decision_costs, output_dir / "decision_costs.png")
+    _plot_latest_holdout_week(result.forecasts, output_dir / "latest_holdout_week.png")
 
 
 def _build_leaderboard(
@@ -308,7 +338,7 @@ def _build_leaderboard(
     model_names: list[str],
 ) -> pd.DataFrame:
     rows: list[dict[str, float | int | str]] = []
-    for split in ["validation", "test"]:
+    for split in [VALIDATION_SPLIT, HISTORICAL_HOLDOUT_SPLIT]:
         for model in model_names:
             group = forecasts.loc[
                 forecasts[Col.SPLIT].eq(split) & forecasts[Col.MODEL].eq(model)
@@ -349,25 +379,27 @@ def _build_leaderboard(
 
 
 def _plot_leaderboard(leaderboard: pd.DataFrame, output_path: Path) -> None:
-    test = leaderboard.loc[leaderboard[Col.SPLIT].eq("test")].sort_values("mae")
+    holdout = leaderboard.loc[
+        leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    ].sort_values("mae")
     figure, axis = plt.subplots(figsize=(9, 5))
     colors = [
         "#15616d" if str(model).startswith("lightgbm") else "#ff7d00"
-        for model in test[Col.MODEL]
+        for model in holdout[Col.MODEL]
     ]
-    axis.barh(test[Col.MODEL], test["mae"], color=colors)
+    axis.barh(holdout[Col.MODEL], holdout["mae"], color=colors)
     axis.invert_yaxis()
-    axis.set(title="PJME frozen test benchmark", xlabel="MAE (MW)")
+    axis.set(title="PJME historical holdout benchmark", xlabel="MAE (MW)")
     axis.grid(axis="x", alpha=0.2)
     figure.tight_layout()
     figure.savefig(output_path, dpi=160)
     plt.close(figure)
 
 
-def _plot_latest_test_week(forecasts: pd.DataFrame, output_path: Path) -> None:
-    test = forecasts.loc[forecasts[Col.SPLIT].eq("test")]
-    latest_fold = int(test[Col.FOLD].max())
-    latest = test.loc[test[Col.FOLD].eq(latest_fold)]
+def _plot_latest_holdout_week(forecasts: pd.DataFrame, output_path: Path) -> None:
+    holdout = forecasts.loc[forecasts[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)]
+    latest_fold = int(holdout[Col.FOLD].max())
+    latest = holdout.loc[holdout[Col.FOLD].eq(latest_fold)]
     actual = latest.loc[latest[Col.MODEL].eq(WEEKLY_NAIVE)]
     figure, axis = plt.subplots(figsize=(14, 5))
     axis.plot(
@@ -384,9 +416,39 @@ def _plot_latest_test_week(forecasts: pd.DataFrame, output_path: Path) -> None:
             label=model_name,
             linewidth=1.5,
         )
-    axis.set(title="Latest frozen test week", ylabel="Load (MW)")
+    axis.set(title="Latest historical holdout week", ylabel="Load (MW)")
     axis.legend()
     axis.grid(alpha=0.2)
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=160)
+    plt.close(figure)
+
+
+def _plot_decision_costs(costs: pd.DataFrame, output_path: Path) -> None:
+    scenarios = list(costs["scenario"].drop_duplicates())
+    models = list(costs[Col.MODEL].drop_duplicates())
+    positions = np.arange(len(models), dtype=float)
+    width = 0.24
+    figure, axis = plt.subplots(figsize=(12, 6))
+    for index, scenario in enumerate(scenarios):
+        scenario_costs = costs.loc[costs["scenario"].eq(scenario)].set_index(Col.MODEL)[
+            "mean_cost"
+        ]
+        axis.bar(
+            positions + (index - 1) * width,
+            [scenario_costs[model] for model in models],
+            width=width,
+            label=scenario.replace("_", " "),
+        )
+    axis.set(
+        title="Historical holdout decision cost by scenario",
+        ylabel="Mean synthetic cost units",
+        xticks=positions,
+        xticklabels=models,
+    )
+    axis.tick_params(axis="x", rotation=30)
+    axis.legend()
+    axis.grid(axis="y", alpha=0.2)
     figure.tight_layout()
     figure.savefig(output_path, dpi=160)
     plt.close(figure)

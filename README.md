@@ -9,9 +9,10 @@ temporal validation, uncertainty, and operationally meaningful evaluation.
 It now also contains the former GridLens operational day-ahead work, so there is
 one canonical energy-forecasting repository rather than two overlapping ones.
 
-![Frozen-test model comparison](docs/assets/frozen-test-mae.svg)
+![Historical holdout model comparison](docs/assets/historical-holdout-mae.svg)
 
-On the frozen 52-week test, the combined LightGBM model reduces MAE by **19.07%**
+On the 52-week historical holdout, the combined LightGBM model reduces MAE by
+**19.07%**
 relative to the weekly seasonal-naive baseline. The gain is **3.07%** relative
 to the stronger daily seasonal-naive baseline and **2.38%** relative to base
 LightGBM. The daily baseline still wins the most individual weeks, so the result
@@ -21,8 +22,8 @@ is reported as an aggregate improvement rather than universal superiority.
 
 Forecasting examples often use random train/test splits, which leak future
 information into model evaluation. GridCast uses strict chronological
-walk-forward validation, explicit daily and weekly baselines, a frozen final
-year, and validation-only conformal calibration.
+walk-forward validation, explicit daily and weekly baselines, a historical
+holdout, and validation-only conformal calibration.
 
 ## Quick start
 
@@ -121,14 +122,19 @@ naive, LightGBM, and separate holiday, weather, and combined ablations. Target
 and observed-weather features are delayed by at least 168 hours; federal
 holidays are known in advance; and temperature climatology uses prior years
 only. The entire weekly horizon is therefore generated without reading realized
-values inside that horizon. The final 52 weeks are frozen as a test set; the
-preceding 12 weeks form the development validation period.
+values inside that horizon. The final 52 weeks form a historical holdout; the
+preceding 12 weeks form the development validation period. Because holdout
+findings informed later experiments, GridCast does not describe this period as
+an untouched final test.
 
 Outputs under `artifacts/benchmark/` include the leaderboard, fold-level
 metrics, timestamped predictions, configuration metadata, and diagnostic
 charts. See [PJME_BENCHMARK.md](PJME_BENCHMARK.md) for results and limitations.
+Each run also emits an auditable
+[experiment manifest](docs/experiment-manifests.md) with Git, configuration,
+feature, dependency, and dataset hashes.
 
-### Frozen-test benchmark
+### Historical holdout benchmark
 
 | Model | MAE (MW) | RMSE (MW) | MASE | MAE vs weekly naive |
 |---|---:|---:|---:|---:|
@@ -147,7 +153,7 @@ validation folds:
 make probabilistic
 ```
 
-The raw quantile interval covers 57.59% of frozen-test observations. A
+The raw quantile interval covers 57.59% of holdout observations. A
 validation-only split-conformal correction increases coverage to 80.04%, close
 to the 80% target, while increasing mean interval width from 5,842 to 8,985 MW.
 An hour-conditional variant reduces mean hourly coverage error by 28.5%, from
@@ -158,6 +164,13 @@ A 12-week causal rolling experiment reaches 79.52% coverage but makes intervals
 documented negative result rather than replacing the static global method.
 See [PJME_PROBABILISTIC.md](PJME_PROBABILISTIC.md) for pinball losses,
 methodology, and limitations.
+
+## Decision-aware evaluation
+
+GridCast evaluates schedules under symmetric, shortage-heavy, and surplus-heavy
+synthetic penalties. It compares point-model schedules and tests whether using
+the cost-optimal quantile (P25/P50/P75) improves on always scheduling P50. See
+[DECISION_EVALUATION.md](DECISION_EVALUATION.md).
 
 ## Interactive dashboard
 
@@ -170,7 +183,7 @@ make dashboard
 The Streamlit dashboard opens at `http://localhost:8501` and provides:
 
 - the complete PJME demand history and headline dataset statistics;
-- the frozen-test leaderboard and model ablations;
+- the historical holdout leaderboard and model ablations;
 - an interactive weekly comparison of actuals and point forecasts;
 - calibrated probabilistic intervals and coverage diagnostics;
 - optional local fit, latency, size, and memory measurements;
@@ -200,9 +213,9 @@ make api
 
 OpenAPI documentation is available at `http://localhost:8000/docs`. The API
 exposes health, metadata, leaderboard, point-forecast, calibrated probabilistic
-forecast, and optional local-performance endpoints. It returns `503` with setup
-instructions when core artifacts are unavailable and `404` if the optional
-performance run has not been generated.
+forecast, decision-sensitivity, and optional local-performance endpoints. It
+returns `503` with setup instructions when core artifacts are unavailable and
+`404` if optional results have not been generated.
 
 Build the same service as a container:
 
@@ -236,7 +249,7 @@ PJM load + ERA5 temperature
 Quality checks + leakage-safe features
             |
             v
-Weekly walk-forward validation and frozen test
+Weekly walk-forward validation and historical holdout
             |
             +--> point models and ablations
             |

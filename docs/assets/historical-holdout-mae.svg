@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title description">
-  <title id="title">PJME frozen-test mean absolute error</title>
+  <title id="title">PJME historical holdout mean absolute error</title>
   <desc id="description">Horizontal bar chart comparing five forecasting models. Lower mean absolute error is better.</desc>
   <rect width="1120" height="560" fill="#f4f1ea"/>
-  <text x="64" y="58" fill="#17242b" font-family="Arial, sans-serif" font-size="30" font-weight="700">PJME frozen-test model comparison</text>
+  <text x="64" y="58" fill="#17242b" font-family="Arial, sans-serif" font-size="30" font-weight="700">PJME historical holdout comparison</text>
   <text x="64" y="88" fill="#69767c" font-family="Arial, sans-serif" font-size="16">Mean absolute error in MW · lower is better · 52 weekly folds</text>
   <line x1="388" y1="126" x2="388" y2="488" stroke="#17242b" stroke-width="2"/>
   <g fill="#69767c" font-family="Arial, sans-serif" font-size="13">
