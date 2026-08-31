@@ -290,16 +290,19 @@ def _render_uncertainty(data: DashboardData) -> None:
     )
     calibration = st.radio(
         "Calibration",
-        options=["Hourly", "Global"],
+        options=["Hourly", "Global", "Rolling prequential"],
         horizontal=True,
     )
     week = probabilistic_week(data.probabilistic_forecasts, "test", int(fold))
-    lower_column = (
-        Col.P10_HOURLY_CALIBRATED if calibration == "Hourly" else Col.P10_CALIBRATED
-    )
-    upper_column = (
-        Col.P90_HOURLY_CALIBRATED if calibration == "Hourly" else Col.P90_CALIBRATED
-    )
+    interval_columns = {
+        "Hourly": (Col.P10_HOURLY_CALIBRATED, Col.P90_HOURLY_CALIBRATED),
+        "Global": (Col.P10_CALIBRATED, Col.P90_CALIBRATED),
+        "Rolling prequential": (
+            Col.P10_ROLLING_CALIBRATED,
+            Col.P90_ROLLING_CALIBRATED,
+        ),
+    }
+    lower_column, upper_column = interval_columns[calibration]
     chart = go.Figure()
     chart.add_trace(
         go.Scatter(
@@ -373,14 +376,15 @@ def _render_uncertainty(data: DashboardData) -> None:
     if isinstance(summary_test, dict):
         coverage = go.Figure(
             go.Bar(
-                x=["Target", "Raw", "Global", "Hourly"],
+                x=["Target", "Raw", "Global", "Hourly", "Rolling"],
                 y=[
                     0.8,
                     _as_float(summary_test.get("raw_coverage", 0)),
                     _as_float(summary_test.get("calibrated_coverage", 0)),
                     _as_float(summary_test.get("hourly_calibrated_coverage", 0)),
+                    _as_float(summary_test.get("rolling_calibrated_coverage", 0)),
                 ],
-                marker_color=[ORANGE, "#9ADBE5", CYAN, "#5969A6"],
+                marker_color=[ORANGE, "#9ADBE5", CYAN, "#5969A6", "#9A6FB0"],
                 texttemplate="%{y:.1%}",
                 textposition="outside",
             )

@@ -10,6 +10,7 @@ from gridcast.probabilistic import (
     ProbabilisticConfig,
     conformal_correction,
     hourly_conformal_corrections,
+    rolling_conformal_corrections,
     run_probabilistic_benchmark,
     write_probabilistic_artifacts,
 )
@@ -58,6 +59,36 @@ def test_hourly_corrections_require_and_calibrate_every_hour() -> None:
         )
 
 
+def test_rolling_corrections_are_causal() -> None:
+    timestamps = pd.date_range("2024-01-01", periods=24, freq="h")
+    base = pd.DataFrame(
+        {
+            Col.TIMESTAMP: timestamps,
+            Col.TARGET: np.arange(24, dtype=float),
+            Col.P10: np.arange(24, dtype=float) - 1.0,
+            Col.P90: np.arange(24, dtype=float) + 1.0,
+            Col.FOLD: np.repeat([1, 2, 3, 4], 6),
+        }
+    )
+    validation = base.iloc[:12].copy()
+    validation[Col.FOLD] = np.repeat([1, 2], 6)
+    test = base.copy()
+
+    original = rolling_conformal_corrections(validation, test, window_folds=2)
+    changed = test.copy()
+    changed.loc[changed[Col.FOLD].eq(3), Col.TARGET] += 1_000.0
+    modified = rolling_conformal_corrections(validation, changed, window_folds=2)
+
+    assert original[1] == modified[1]
+    assert original[2] == modified[2]
+    assert original[3] == modified[3]
+    assert original[4] != modified[4]
+    with pytest.raises(ValueError, match="positive"):
+        rolling_conformal_corrections(validation, test, window_folds=0)
+    with pytest.raises(ValueError, match="validation"):
+        rolling_conformal_corrections(validation.iloc[:0], test, window_folds=2)
+
+
 def test_probabilistic_benchmark_separates_calibration_and_test(
     tmp_path: Path,
 ) -> None:
@@ -81,6 +112,7 @@ def test_probabilistic_benchmark_separates_calibration_and_test(
     assert (result.forecasts[Col.P90_CALIBRATED] >= result.forecasts[Col.P90]).all()
     assert result.conformal_correction_mw >= 0.0
     assert set(result.hourly_corrections_mw) == set(range(24))
+    assert set(result.rolling_corrections_mw) == {1}
     assert (
         result.forecasts[Col.P10_HOURLY_CALIBRATED] <= result.forecasts[Col.P10]
     ).all()
@@ -93,7 +125,9 @@ def test_probabilistic_benchmark_separates_calibration_and_test(
         "hourly_coverage.png",
         "latest_test_interval.png",
         "metrics.csv",
+        "rolling_corrections.csv",
         "summary.json",
+        "weekly_coverage.csv",
     }
 
 
@@ -106,6 +140,8 @@ def test_probabilistic_config_and_history_are_validated() -> None:
         ProbabilisticConfig(max_train_hours=100)
     with pytest.raises(ValueError, match="n_estimators"):
         ProbabilisticConfig(n_estimators=0)
+    with pytest.raises(ValueError, match="rolling_window_folds"):
+        ProbabilisticConfig(rolling_window_folds=0)
 
     data = generate_synthetic_load(periods=24 * 30)
     weather = data[[Col.TIMESTAMP]].assign(**{Col.TEMPERATURE: 10.0})

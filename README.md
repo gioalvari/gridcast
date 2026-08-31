@@ -135,6 +135,9 @@ to the 80% target, while increasing mean interval width from 5,842 to 8,985 MW.
 An hour-conditional variant reduces mean hourly coverage error by 28.5%, from
 2.40 to 1.72 percentage points, at the cost of 4.2% wider intervals and 81.40%
 aggregate coverage.
+A 12-week causal rolling experiment reaches 79.52% coverage but makes intervals
+2.64% wider and does not improve week-level calibration. It is retained as a
+documented negative result rather than replacing the static global method.
 See [PJME_PROBABILISTIC.md](PJME_PROBABILISTIC.md) for pinball losses,
 methodology, and limitations.
 
@@ -227,7 +230,7 @@ Weekly walk-forward validation and frozen test
 
 ## Roadmap
 
-- Rolling and seasonal conformal calibration
+- Seasonal conformal calibration
 - Deployment of the API and dashboard to a public demo environment
 
 ## Development

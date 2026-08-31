@@ -44,6 +44,8 @@ class ProbabilisticConfig:
         Most recent training history retained for each model.
     n_estimators : int, default=300
         LightGBM boosting iterations for each quantile and fold.
+    rolling_window_folds : int, default=12
+        Completed weekly folds retained for causal rolling calibration.
     """
 
     horizon: int = 24 * 7
@@ -51,6 +53,7 @@ class ProbabilisticConfig:
     test_folds: int = 52
     max_train_hours: int = 24 * 365 * 5
     n_estimators: int = 300
+    rolling_window_folds: int = 12
 
     def __post_init__(self) -> None:
         """Validate probabilistic experiment sizes."""
@@ -65,6 +68,9 @@ class ProbabilisticConfig:
             raise ValueError(msg)
         if self.n_estimators < 1:
             msg = "n_estimators must be positive"
+            raise ValueError(msg)
+        if self.rolling_window_folds < 1:
+            msg = "rolling_window_folds must be positive"
             raise ValueError(msg)
 
 
@@ -82,12 +88,15 @@ class ProbabilisticResult:
         Symmetric interval expansion learned from validation residuals.
     hourly_corrections_mw : dict of int to float
         Validation-only interval expansion learned separately for each hour.
+    rolling_corrections_mw : dict of int to float
+        Causal interval expansion used for each test fold.
     """
 
     forecasts: pd.DataFrame
     metrics: pd.DataFrame
     conformal_correction_mw: float
     hourly_corrections_mw: dict[int, float]
+    rolling_corrections_mw: dict[int, float]
 
 
 def conformal_correction(
@@ -184,6 +193,55 @@ def hourly_conformal_corrections(
     return corrections
 
 
+def rolling_conformal_corrections(
+    validation: pd.DataFrame,
+    test: pd.DataFrame,
+    window_folds: int,
+) -> dict[int, float]:
+    """Estimate causal rolling corrections for successive test folds.
+
+    Each test fold is calibrated from the latest completed weekly folds. The
+    first test fold uses validation only; after evaluation, each completed test
+    fold enters the history available to later folds.
+
+    Parameters
+    ----------
+    validation : pandas.DataFrame
+        Chronological validation forecasts.
+    test : pandas.DataFrame
+        Chronological test forecasts.
+    window_folds : int
+        Maximum completed weekly folds retained for calibration.
+
+    Returns
+    -------
+    dict
+        Symmetric correction in megawatts keyed by test fold.
+    """
+    if window_folds < 1:
+        msg = "window_folds must be positive"
+        raise ValueError(msg)
+    history = [
+        group
+        for _, group in validation.sort_values(Col.TIMESTAMP).groupby(
+            Col.FOLD, sort=True
+        )
+    ]
+    if not history:
+        msg = "rolling calibration requires validation folds"
+        raise ValueError(msg)
+    corrections: dict[int, float] = {}
+    for fold, group in test.sort_values(Col.TIMESTAMP).groupby(Col.FOLD, sort=True):
+        calibration = pd.concat(history[-window_folds:], ignore_index=True)
+        corrections[int(str(fold))] = conformal_correction(
+            calibration[Col.TARGET].to_numpy(dtype=np.float64),
+            calibration[Col.P10].to_numpy(dtype=np.float64),
+            calibration[Col.P90].to_numpy(dtype=np.float64),
+        )
+        history.append(group)
+    return corrections
+
+
 def run_probabilistic_benchmark(
     data: pd.DataFrame,
     weather: pd.DataFrame,
@@ -246,14 +304,34 @@ def run_probabilistic_benchmark(
         "test",
         config,
     )
+    rolling_corrections = rolling_conformal_corrections(
+        validation, test, config.rolling_window_folds
+    )
     forecasts = pd.concat([validation, test], ignore_index=True)
     forecasts[Col.P10_CALIBRATED] = forecasts[Col.P10] - correction
     forecasts[Col.P90_CALIBRATED] = forecasts[Col.P90] + correction
     row_corrections = forecasts[Col.TIMESTAMP].dt.hour.map(hourly_corrections)
     forecasts[Col.P10_HOURLY_CALIBRATED] = forecasts[Col.P10] - row_corrections
     forecasts[Col.P90_HOURLY_CALIBRATED] = forecasts[Col.P90] + row_corrections
+    rolling_row_corrections = pd.Series(
+        correction,
+        index=forecasts.index,
+        dtype=float,
+    )
+    test_mask = forecasts[Col.SPLIT].eq("test")
+    rolling_row_corrections.loc[test_mask] = forecasts.loc[test_mask, Col.FOLD].map(
+        rolling_corrections
+    )
+    forecasts[Col.P10_ROLLING_CALIBRATED] = forecasts[Col.P10] - rolling_row_corrections
+    forecasts[Col.P90_ROLLING_CALIBRATED] = forecasts[Col.P90] + rolling_row_corrections
     metrics = _probabilistic_metrics(forecasts)
-    return ProbabilisticResult(forecasts, metrics, correction, hourly_corrections)
+    return ProbabilisticResult(
+        forecasts,
+        metrics,
+        correction,
+        hourly_corrections,
+        rolling_corrections,
+    )
 
 
 def write_probabilistic_artifacts(
@@ -279,6 +357,14 @@ def write_probabilistic_artifacts(
     result.metrics.to_csv(output_dir / "metrics.csv", index=False)
     hourly_metrics = _hourly_coverage_metrics(result.forecasts)
     hourly_metrics.to_csv(output_dir / "hourly_coverage.csv", index=False)
+    weekly_metrics = _weekly_coverage_metrics(result.forecasts)
+    weekly_metrics.to_csv(output_dir / "weekly_coverage.csv", index=False)
+    pd.DataFrame(
+        [
+            {Col.FOLD: fold, "rolling_correction_mw": correction}
+            for fold, correction in result.rolling_corrections_mw.items()
+        ]
+    ).to_csv(output_dir / "rolling_corrections.csv", index=False)
     test_metrics = result.metrics.loc[result.metrics[Col.SPLIT].eq("test")].iloc[0]
     metadata = {
         "config": asdict(config),
@@ -288,6 +374,10 @@ def write_probabilistic_artifacts(
         "hourly_corrections_mw": {
             str(hour): correction
             for hour, correction in result.hourly_corrections_mw.items()
+        },
+        "rolling_corrections_mw": {
+            str(fold): correction
+            for fold, correction in result.rolling_corrections_mw.items()
         },
         "test": {
             key: float(test_metrics[key])
@@ -299,11 +389,15 @@ def write_probabilistic_artifacts(
                 "raw_coverage",
                 "calibrated_coverage",
                 "hourly_calibrated_coverage",
+                "rolling_calibrated_coverage",
                 "raw_mean_width_mw",
                 "calibrated_mean_width_mw",
                 "hourly_calibrated_mean_width_mw",
+                "rolling_calibrated_mean_width_mw",
                 "global_hourly_coverage_mae",
                 "conditional_hourly_coverage_mae",
+                "global_weekly_coverage_mae",
+                "rolling_weekly_coverage_mae",
             ]
         },
     }
@@ -381,7 +475,16 @@ def _probabilistic_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
             NDArray[np.float64],
             group[Col.P90_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
         )
+        rolling_lower = cast(
+            NDArray[np.float64],
+            group[Col.P10_ROLLING_CALIBRATED].to_numpy(dtype=np.float64),
+        )
+        rolling_upper = cast(
+            NDArray[np.float64],
+            group[Col.P90_ROLLING_CALIBRATED].to_numpy(dtype=np.float64),
+        )
         hourly_metrics = _hourly_coverage_metrics(group)
+        weekly_metrics = _weekly_coverage_metrics(group)
         rows.append(
             {
                 Col.SPLIT: split,
@@ -396,16 +499,30 @@ def _probabilistic_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
                 "hourly_calibrated_coverage": interval_coverage(
                     actual, hourly_lower, hourly_upper
                 ),
+                "rolling_calibrated_coverage": interval_coverage(
+                    actual, rolling_lower, rolling_upper
+                ),
                 "raw_mean_width_mw": mean_interval_width(p10, p90),
                 "calibrated_mean_width_mw": mean_interval_width(lower, upper),
                 "hourly_calibrated_mean_width_mw": mean_interval_width(
                     hourly_lower, hourly_upper
+                ),
+                "rolling_calibrated_mean_width_mw": mean_interval_width(
+                    rolling_lower, rolling_upper
                 ),
                 "global_hourly_coverage_mae": float(
                     np.mean(np.abs(hourly_metrics["global_coverage"] - TARGET_COVERAGE))
                 ),
                 "conditional_hourly_coverage_mae": float(
                     np.mean(np.abs(hourly_metrics["hourly_coverage"] - TARGET_COVERAGE))
+                ),
+                "global_weekly_coverage_mae": float(
+                    np.mean(np.abs(weekly_metrics["global_coverage"] - TARGET_COVERAGE))
+                ),
+                "rolling_weekly_coverage_mae": float(
+                    np.mean(
+                        np.abs(weekly_metrics["rolling_coverage"] - TARGET_COVERAGE)
+                    )
                 ),
             }
         )
@@ -440,6 +557,37 @@ def _hourly_coverage_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
                         group[Col.P10_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
                         group[Col.P90_HOURLY_CALIBRATED].to_numpy(dtype=np.float64),
                     ),
+                    "rolling_coverage": interval_coverage(
+                        actual,
+                        group[Col.P10_ROLLING_CALIBRATED].to_numpy(dtype=np.float64),
+                        group[Col.P90_ROLLING_CALIBRATED].to_numpy(dtype=np.float64),
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _weekly_coverage_metrics(forecasts: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, float | int | str]] = []
+    for split in forecasts[Col.SPLIT].drop_duplicates():
+        split_data = forecasts.loc[forecasts[Col.SPLIT].eq(split)]
+        for fold, group in split_data.groupby(Col.FOLD, sort=True):
+            actual = group[Col.TARGET].to_numpy(dtype=np.float64)
+            rows.append(
+                {
+                    Col.SPLIT: str(split),
+                    Col.FOLD: int(str(fold)),
+                    "observations": len(group),
+                    "global_coverage": interval_coverage(
+                        actual,
+                        group[Col.P10_CALIBRATED].to_numpy(dtype=np.float64),
+                        group[Col.P90_CALIBRATED].to_numpy(dtype=np.float64),
+                    ),
+                    "rolling_coverage": interval_coverage(
+                        actual,
+                        group[Col.P10_ROLLING_CALIBRATED].to_numpy(dtype=np.float64),
+                        group[Col.P90_ROLLING_CALIBRATED].to_numpy(dtype=np.float64),
+                    ),
                 }
             )
     return pd.DataFrame(rows)
@@ -473,14 +621,19 @@ def _plot_latest_interval(forecasts: pd.DataFrame, output_path: Path) -> None:
 def _plot_calibration(metrics: pd.DataFrame, output_path: Path) -> None:
     test = metrics.loc[metrics[Col.SPLIT].eq("test")].iloc[0]
     figure, axis = plt.subplots(figsize=(7, 5))
-    labels = ["Target", "Raw", "Global", "Hourly"]
+    labels = ["Target", "Raw", "Global", "Hourly", "Rolling"]
     values = [
         TARGET_COVERAGE,
         test["raw_coverage"],
         test["calibrated_coverage"],
         test["hourly_calibrated_coverage"],
+        test["rolling_calibrated_coverage"],
     ]
-    axis.bar(labels, values, color=["#ff7d00", "#7bdff2", "#15616d", "#5969a6"])
+    axis.bar(
+        labels,
+        values,
+        color=["#ff7d00", "#7bdff2", "#15616d", "#5969a6", "#9a6fb0"],
+    )
     axis.set(title="Frozen test interval coverage", ylabel="Coverage", ylim=(0.0, 1.0))
     axis.grid(axis="y", alpha=0.2)
     figure.tight_layout()

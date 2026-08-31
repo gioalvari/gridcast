@@ -141,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     probabilistic.add_argument("--test-folds", type=int, default=52)
     probabilistic.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
     probabilistic.add_argument("--n-estimators", type=int, default=300)
+    probabilistic.add_argument("--rolling-window-folds", type=int, default=12)
     performance = subparsers.add_parser(
         "performance", help="benchmark local fit and inference performance"
     )
@@ -323,6 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             test_folds=args.test_folds,
             max_train_hours=args.max_train_hours,
             n_estimators=args.n_estimators,
+            rolling_window_folds=args.rolling_window_folds,
         )
         probabilistic_result = run_probabilistic_benchmark(
             pd.read_parquet(args.input),
@@ -336,12 +338,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             probabilistic_result.metrics["split"].eq("test")
         ].iloc[0]
         LOGGER.info(
-            "Probabilistic test: raw coverage %.3f, global %.3f, hourly %.3f, "
-            "hourly width %.2f MW",
+            "Probabilistic test: raw %.3f, global %.3f, hourly %.3f, rolling %.3f",
             test_metrics["raw_coverage"],
             test_metrics["calibrated_coverage"],
             test_metrics["hourly_calibrated_coverage"],
-            test_metrics["hourly_calibrated_mean_width_mw"],
+            test_metrics["rolling_calibrated_coverage"],
         )
     elif args.command == "performance":
         import pandas as pd

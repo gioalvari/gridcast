@@ -102,6 +102,12 @@ class ProbabilisticMetadata(APIModel):
         Mean absolute hourly deviation from nominal coverage for global calibration.
     conditional_hourly_coverage_mae : float
         Mean absolute hourly deviation for hour-conditional calibration.
+    rolling_calibrated_coverage : float
+        Prequential test coverage with causal rolling calibration.
+    global_weekly_coverage_mae : float
+        Mean absolute weekly coverage deviation for static global calibration.
+    rolling_weekly_coverage_mae : float
+        Mean absolute weekly coverage deviation for rolling calibration.
     """
 
     quantiles: list[float]
@@ -112,6 +118,9 @@ class ProbabilisticMetadata(APIModel):
     hourly_calibrated_coverage: float = Field(ge=0.0, le=1.0)
     global_hourly_coverage_mae: float = Field(ge=0.0, le=1.0)
     conditional_hourly_coverage_mae: float = Field(ge=0.0, le=1.0)
+    rolling_calibrated_coverage: float = Field(ge=0.0, le=1.0)
+    global_weekly_coverage_mae: float = Field(ge=0.0, le=1.0)
+    rolling_weekly_coverage_mae: float = Field(ge=0.0, le=1.0)
 
 
 class MetadataResponse(APIModel):
@@ -169,6 +178,8 @@ class ProbabilisticForecast(APIModel):
     p90_calibrated_mw: float
     p10_hourly_calibrated_mw: float
     p90_hourly_calibrated_mw: float
+    p10_rolling_calibrated_mw: float
+    p90_rolling_calibrated_mw: float
     split: str
     fold: int = Field(ge=1)
 

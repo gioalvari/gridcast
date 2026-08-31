@@ -53,6 +53,8 @@ def _service() -> GridCastService:
             Col.P90_CALIBRATED: [33_000.0, 34_000.0],
             Col.P10_HOURLY_CALIBRATED: [27_500.0, 28_500.0],
             Col.P90_HOURLY_CALIBRATED: [32_500.0, 33_500.0],
+            Col.P10_ROLLING_CALIBRATED: [27_200.0, 28_200.0],
+            Col.P90_ROLLING_CALIBRATED: [32_800.0, 33_800.0],
             Col.SPLIT: ["test"] * 2,
             Col.FOLD: [1] * 2,
         }
@@ -88,6 +90,9 @@ def _service() -> GridCastService:
                 "hourly_calibrated_coverage": 0.814,
                 "global_hourly_coverage_mae": 0.024,
                 "conditional_hourly_coverage_mae": 0.017,
+                "rolling_calibrated_coverage": 0.805,
+                "global_weekly_coverage_mae": 0.12,
+                "rolling_weekly_coverage_mae": 0.10,
             },
         },
     )
@@ -128,6 +133,9 @@ async def test_metadata_returns_evaluation_contract(client: httpx.AsyncClient) -
     assert payload["probabilistic"]["calibrated_coverage"] == pytest.approx(0.8)
     assert payload["probabilistic"]["hourly_calibrated_coverage"] == pytest.approx(
         0.814
+    )
+    assert payload["probabilistic"]["rolling_calibrated_coverage"] == pytest.approx(
+        0.805
     )
 
 
@@ -171,6 +179,7 @@ async def test_probabilistic_endpoint_returns_calibrated_bounds(
     assert payload["forecasts"][0]["p90_calibrated_mw"] == 33_000.0
     assert payload["forecasts"][0]["p10_hourly_calibrated_mw"] == 27_500.0
     assert payload["forecasts"][0]["p90_hourly_calibrated_mw"] == 32_500.0
+    assert payload["forecasts"][0]["p10_rolling_calibrated_mw"] == 27_200.0
 
 
 @pytest.mark.anyio

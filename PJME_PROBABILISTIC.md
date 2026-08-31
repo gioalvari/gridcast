@@ -36,13 +36,17 @@ predicted values.
 | Raw P10-P90 coverage | 57.59% |
 | Conformal coverage | 80.04% |
 | Hour-conditional conformal coverage | 81.40% |
+| Rolling prequential coverage | 79.52% |
 | Target coverage | 80.00% |
 | Raw mean interval width | 5,842.13 MW |
 | Calibrated mean interval width | 8,984.87 MW |
 | Hour-conditional mean interval width | 9,366.19 MW |
+| Rolling prequential mean interval width | 9,221.88 MW |
 | Conformal correction per bound | 1,571.37 MW |
 | Global mean hourly coverage error | 2.40 percentage points |
 | Conditional mean hourly coverage error | 1.72 percentage points |
+| Global mean weekly coverage error | 19.32 percentage points |
+| Rolling mean weekly coverage error | 19.34 percentage points |
 
 ## Interpretation
 
@@ -63,6 +67,14 @@ coverage and intervals that are 4.2% wider than the globally calibrated
 interval. GridCast therefore preserves both methods rather than presenting the
 conditional version as an unconditional improvement.
 
+A causal rolling experiment retains the latest 12 completed weekly folds. The
+first test week uses validation only; each subsequent week may use labels from
+earlier completed test weeks, but never from itself or the future. Aggregate
+coverage moves to 79.52%, while intervals become 2.64% wider than static global
+calibration. Mean weekly coverage error is effectively unchanged and slightly
+worse (19.34 versus 19.32 percentage points). Rolling calibration is therefore
+retained as a transparent negative result, not selected as the default method.
+
 ## Limitations
 
 - The interval has marginal coverage across the full test year; it does not
@@ -70,6 +82,8 @@ conditional version as an unconditional improvement.
 - The hour-conditional method uses only 84 validation observations per hour,
   making each finite-sample correction relatively coarse.
 - Neither method guarantees coverage for each individual week or season.
+- The rolling result is prequential rather than a fully untouched frozen-test
+  estimate because labels from completed test weeks calibrate later weeks.
 - ERA5 observations are used only through delayed values and prior-year
   climatology because archived operational forecasts do not span 2002-2018.
 - Quantile sorting avoids crossing but does not jointly train a coherent
@@ -77,5 +91,5 @@ conditional version as an unconditional improvement.
 
 ## Next experiment
 
-Evaluate rolling calibration windows and seasonal groups against both current
-baselines, with explicit minimum sample sizes and no use of frozen-test labels.
+Evaluate seasonal groups against the static global and hourly baselines, with
+explicit minimum sample sizes and no use of frozen-test labels.
