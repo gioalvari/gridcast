@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from gridcast.api_models import (
     DecisionResponse,
+    FoundationResponse,
     HealthResponse,
     LeaderboardEntry,
     MetadataResponse,
@@ -17,7 +18,11 @@ from gridcast.api_models import (
     PointForecastResponse,
     ProbabilisticForecastResponse,
 )
-from gridcast.api_service import ForecastNotFoundError, GridCastService
+from gridcast.api_service import (
+    ForecastNotFoundError,
+    GridCastService,
+    InvalidArtifactError,
+)
 from gridcast.dashboard_data import MissingArtifactsError, load_dashboard_data
 
 LOGGER = logging.getLogger(__name__)
@@ -46,7 +51,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="GridCast API",
-    description="Read-only PJME point and probabilistic forecast artifacts.",
+    description=(
+        "Read-only PJME point, probabilistic, decision, performance, and "
+        "foundation-model artifacts."
+    ),
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -73,6 +81,15 @@ async def forecast_not_found_handler(
 ) -> JSONResponse:
     """Map missing forecast selections to HTTP 404."""
     return JSONResponse(status_code=404, content={"detail": str(error)})
+
+
+@app.exception_handler(InvalidArtifactError)
+async def invalid_artifact_handler(
+    _: Request, error: InvalidArtifactError
+) -> JSONResponse:
+    """Map invalid generated artifacts to service unavailable."""
+    LOGGER.error("API artifact invalid: %s", error)
+    return JSONResponse(status_code=503, content={"detail": str(error)})
 
 
 @app.get("/health", response_model=HealthResponse, tags=["operations"])
@@ -159,3 +176,15 @@ async def decisions(
 ) -> DecisionResponse:
     """Return optional synthetic decision-cost sensitivity results."""
     return await service.decisions()
+
+
+@app.get(
+    "/api/v1/foundation",
+    response_model=FoundationResponse,
+    tags=["forecasts"],
+)
+async def foundation(
+    service: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> FoundationResponse:
+    """Return optional zero-shot foundation-model benchmark results."""
+    return await service.foundation()

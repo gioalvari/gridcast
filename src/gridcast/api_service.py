@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -8,6 +9,9 @@ from gridcast.api_models import (
     DatasetMetadata,
     DecisionResponse,
     ExperimentMetadata,
+    FoundationResponse,
+    FoundationRuntime,
+    FoundationSummary,
     LeaderboardEntry,
     MetadataResponse,
     PerformanceMeasurement,
@@ -26,10 +30,15 @@ from gridcast.performance import load_performance_summary
 
 POINT_DECISIONS_PATH = Path("artifacts/benchmark/decision_costs.csv")
 QUANTILE_DECISIONS_PATH = Path("artifacts/probabilistic/decision_costs.csv")
+FOUNDATION_SUMMARY_PATH = Path("artifacts/foundation/timesfm-2.5-200m/summary.json")
 
 
 class ForecastNotFoundError(LookupError):
     """Raised when a requested split, fold, or model does not exist."""
+
+
+class InvalidArtifactError(ValueError):
+    """Raised when a generated artifact does not satisfy its public contract."""
 
 
 class GridCastService:
@@ -317,6 +326,35 @@ class GridCastService:
             ],
         )
 
+    async def foundation(self) -> FoundationResponse:
+        """Return optional zero-shot time-series foundation-model results."""
+        if not FOUNDATION_SUMMARY_PATH.exists():
+            raise ForecastNotFoundError(
+                "foundation artifacts not found; run `make timesfm`"
+            )
+        try:
+            summary = FoundationSummary.model_validate(
+                self._read_json(FOUNDATION_SUMMARY_PATH)
+            )
+            return FoundationResponse(
+                model_name=summary.config.model_name,
+                model_id=summary.config.model_id,
+                model_revision=summary.config.model_revision,
+                context_length=summary.config.context_length,
+                horizon=summary.config.horizon,
+                holdout_folds=summary.config.holdout_folds,
+                model_parameters=summary.config.model_parameters,
+                timing=summary.timing,
+                metrics=summary.metrics,
+                environment=FoundationRuntime.model_validate(
+                    summary.environment.model_dump(exclude={"installed_packages"})
+                ),
+            )
+        except (OSError, ValueError) as error:
+            raise InvalidArtifactError(
+                f"invalid foundation artifact: {error}"
+            ) from error
+
     def _benchmark_summary(self) -> dict[str, object]:
         summary_path = self.data.probabilistic_summary.get("benchmark_summary")
         if isinstance(summary_path, dict):
@@ -362,3 +400,11 @@ class GridCastService:
         if isinstance(value, datetime):
             return value
         raise ValueError(f"expected datetime metadata, received {value!r}")
+
+    @staticmethod
+    def _read_json(path: Path) -> dict[str, object]:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            msg = f"{path} must contain a JSON object"
+            raise ValueError(msg)
+        return cast(dict[str, object], payload)

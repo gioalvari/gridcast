@@ -141,4 +141,5 @@ def test_dashboard_transformations_select_expected_rows(tmp_path: Path) -> None:
     assert point[Col.MODEL].eq("lightgbm").all()
     assert len(probabilistic) == 4
     assert display_model("lightgbm_exogenous") == "LightGBM + weather + holidays"
+    assert display_model("timesfm_2_5_200m_zero_shot") == ("TimesFM 2.5 200M zero-shot")
     assert display_model("custom_model") == "Custom Model"
