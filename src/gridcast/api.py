@@ -12,6 +12,7 @@ from gridcast.api_models import (
     HealthResponse,
     LeaderboardEntry,
     MetadataResponse,
+    PerformanceResponse,
     PointForecastResponse,
     ProbabilisticForecastResponse,
 )
@@ -127,3 +128,15 @@ async def probabilistic_forecasts(
 ) -> ProbabilisticForecastResponse:
     """Return raw quantiles and conformal bounds for one weekly fold."""
     return await service.probabilistic_forecasts(split, fold)
+
+
+@app.get(
+    "/api/v1/performance",
+    response_model=PerformanceResponse,
+    tags=["operations"],
+)
+async def performance(
+    service: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> PerformanceResponse:
+    """Return optional local model performance measurements."""
+    return await service.performance()

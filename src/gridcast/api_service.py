@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from typing import cast
 
 from gridcast.api_models import (
@@ -6,6 +7,8 @@ from gridcast.api_models import (
     ExperimentMetadata,
     LeaderboardEntry,
     MetadataResponse,
+    PerformanceMeasurement,
+    PerformanceResponse,
     PointForecast,
     PointForecastResponse,
     ProbabilisticForecast,
@@ -14,6 +17,7 @@ from gridcast.api_models import (
 )
 from gridcast.columns import Col
 from gridcast.dashboard_data import DashboardData, benchmark_week, display_model
+from gridcast.performance import load_performance_summary
 
 
 class ForecastNotFoundError(LookupError):
@@ -230,6 +234,41 @@ class GridCastService:
                 self.data.probabilistic_summary.get("target_coverage")
             ),
             forecasts=forecasts,
+        )
+
+    async def performance(self) -> PerformanceResponse:
+        """Return optional environment-qualified performance measurements.
+
+        Returns
+        -------
+        PerformanceResponse
+            Host metadata and model performance measurements.
+
+        Raises
+        ------
+        ForecastNotFoundError
+            If the local performance benchmark has not been generated.
+        """
+        try:
+            summary = load_performance_summary(
+                Path("artifacts/performance/summary.json")
+            )
+        except FileNotFoundError as error:
+            raise ForecastNotFoundError(
+                "performance artifacts not found; run `make performance`"
+            ) from error
+        environment = self._object_dict(summary.get("environment"))
+        measurements = [
+            PerformanceMeasurement.model_validate(item)
+            for item in self._object_list(summary.get("measurements"))
+        ]
+        return PerformanceResponse(
+            environment={
+                key: value
+                for key, value in environment.items()
+                if isinstance(value, (str, int))
+            },
+            measurements=measurements,
         )
 
     def _benchmark_summary(self) -> dict[str, object]:

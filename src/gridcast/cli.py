@@ -12,6 +12,11 @@ from gridcast.benchmark import (
 )
 from gridcast.data import generate_synthetic_load
 from gridcast.eda import create_eda_report
+from gridcast.performance import (
+    PerformanceConfig,
+    run_performance_benchmark,
+    write_performance_artifacts,
+)
 from gridcast.pjm import ingest_pjme
 from gridcast.probabilistic import (
     ProbabilisticConfig,
@@ -118,6 +123,25 @@ def build_parser() -> argparse.ArgumentParser:
     probabilistic.add_argument("--test-folds", type=int, default=52)
     probabilistic.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
     probabilistic.add_argument("--n-estimators", type=int, default=300)
+    performance = subparsers.add_parser(
+        "performance", help="benchmark local fit and inference performance"
+    )
+    performance.add_argument(
+        "--input", type=Path, default=Path("data/processed/pjme_hourly.parquet")
+    )
+    performance.add_argument(
+        "--weather",
+        type=Path,
+        default=Path("data/processed/philadelphia_temperature.parquet"),
+    )
+    performance.add_argument(
+        "--output-dir", type=Path, default=Path("artifacts/performance")
+    )
+    performance.add_argument("--horizon", type=int, default=24 * 7)
+    performance.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
+    performance.add_argument("--n-estimators", type=int, default=300)
+    performance.add_argument("--warmup-runs", type=int, default=5)
+    performance.add_argument("--repetitions", type=int, default=100)
     return parser
 
 
@@ -283,5 +307,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             test_metrics["calibrated_coverage"],
             test_metrics["hourly_calibrated_coverage"],
             test_metrics["hourly_calibrated_mean_width_mw"],
+        )
+    elif args.command == "performance":
+        import pandas as pd
+
+        performance_config = PerformanceConfig(
+            horizon=args.horizon,
+            max_train_hours=args.max_train_hours,
+            n_estimators=args.n_estimators,
+            warmup_runs=args.warmup_runs,
+            repetitions=args.repetitions,
+        )
+        performance_result = run_performance_benchmark(
+            pd.read_parquet(args.input),
+            pd.read_parquet(args.weather),
+            performance_config,
+        )
+        write_performance_artifacts(
+            performance_result, performance_config, args.output_dir
+        )
+        fastest = performance_result.measurements.sort_values(
+            "prediction_median_ms"
+        ).iloc[0]
+        LOGGER.info(
+            "Fastest weekly inference: %s at %.3f ms median",
+            fastest["model"],
+            fastest["prediction_median_ms"],
         )
     return 0

@@ -138,7 +138,22 @@ The Streamlit dashboard opens at `http://localhost:8501` and provides:
 - the frozen-test leaderboard and model ablations;
 - an interactive weekly comparison of actuals and point forecasts;
 - calibrated probabilistic intervals and coverage diagnostics;
+- optional local fit, latency, size, and memory measurements;
 - a concise explanation of the anti-leakage evaluation contract.
+
+## Local inference performance
+
+Measure fit time, warm weekly prediction latency, throughput, serialized model
+size, and indicative process-memory change:
+
+```bash
+make performance
+```
+
+On an Apple silicon development machine, both 300-tree LightGBM variants served
+the complete 168-hour horizon in under one millisecond median in-process latency
+after warmup. See [PERFORMANCE.md](PERFORMANCE.md) for the hardware-qualified
+protocol, results, and limitations.
 
 ## Read-only API
 
@@ -149,9 +164,10 @@ make api
 ```
 
 OpenAPI documentation is available at `http://localhost:8000/docs`. The API
-exposes health, metadata, leaderboard, point-forecast, and calibrated
-probabilistic-forecast endpoints. It returns `503` with setup instructions when
-the local generated artifacts are unavailable.
+exposes health, metadata, leaderboard, point-forecast, calibrated probabilistic
+forecast, and optional local-performance endpoints. It returns `503` with setup
+instructions when core artifacts are unavailable and `404` if the optional
+performance run has not been generated.
 
 Build the same service as a container:
 
@@ -198,7 +214,6 @@ Weekly walk-forward validation and frozen test
 ## Roadmap
 
 - Rolling and seasonal conformal calibration
-- Inference latency and memory benchmarks
 - Deployment of the API and dashboard to a public demo environment
 
 ## Development

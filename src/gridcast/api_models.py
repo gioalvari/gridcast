@@ -180,3 +180,24 @@ class ProbabilisticForecastResponse(APIModel):
     fold: int
     target_coverage: float
     forecasts: list[ProbabilisticForecast]
+
+
+class PerformanceMeasurement(APIModel):
+    """One environment-qualified local model performance measurement."""
+
+    model: str
+    fit_time_ms: float = Field(ge=0.0)
+    prediction_median_ms: float = Field(gt=0.0)
+    prediction_p95_ms: float = Field(gt=0.0)
+    throughput_rows_per_second: float = Field(gt=0.0)
+    serialized_model_kib: float = Field(gt=0.0)
+    fit_rss_delta_mib: float = Field(ge=0.0)
+    horizon_rows: int = Field(ge=1)
+    repetitions: int = Field(ge=1)
+
+
+class PerformanceResponse(APIModel):
+    """Local benchmark environment and per-model measurements."""
+
+    environment: dict[str, str | int]
+    measurements: list[PerformanceMeasurement]

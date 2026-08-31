@@ -196,3 +196,48 @@ async def test_missing_artifacts_return_service_unavailable(
 
     assert response.status_code == 503
     assert "missing artifacts" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_performance_endpoint_returns_optional_measurements(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "gridcast.api_service.load_performance_summary",
+        lambda path: {
+            "environment": {"platform": "test", "logical_cpu_count": 4},
+            "measurements": [
+                {
+                    "model": "lightgbm",
+                    "fit_time_ms": 100.0,
+                    "prediction_median_ms": 0.5,
+                    "prediction_p95_ms": 0.8,
+                    "throughput_rows_per_second": 336_000.0,
+                    "serialized_model_kib": 836.0,
+                    "fit_rss_delta_mib": 8.0,
+                    "horizon_rows": 168,
+                    "repetitions": 100,
+                }
+            ],
+        },
+    )
+
+    response = await client.get("/api/v1/performance")
+
+    assert response.status_code == 200
+    assert response.json()["measurements"][0]["prediction_median_ms"] == 0.5
+
+
+@pytest.mark.anyio
+async def test_performance_endpoint_reports_missing_artifact(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing(path: Path) -> dict[str, object]:
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr("gridcast.api_service.load_performance_summary", missing)
+
+    response = await client.get("/api/v1/performance")
+
+    assert response.status_code == 404
+    assert "make performance" in response.json()["detail"]

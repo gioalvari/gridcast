@@ -1,4 +1,4 @@
-.PHONY: install check format test demo data weather eda benchmark probabilistic dashboard api docker-build full clean
+.PHONY: install check format test demo data weather eda benchmark probabilistic performance dashboard api docker-build full clean
 
 install:
 	uv sync --all-extras
@@ -33,6 +33,9 @@ benchmark:
 
 probabilistic:
 	uv run gridcast probabilistic
+
+performance:
+	uv run gridcast performance
 
 dashboard:
 	uv run streamlit run src/gridcast/dashboard.py

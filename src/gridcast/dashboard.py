@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -14,6 +15,7 @@ from gridcast.dashboard_data import (
     load_dashboard_data,
     probabilistic_week,
 )
+from gridcast.performance import load_performance_summary
 
 INK = "#17242B"
 ORANGE = "#F05D23"
@@ -412,6 +414,64 @@ def _render_methodology() -> None:
     )
 
 
+def _render_performance() -> None:
+    st.markdown("## Local inference performance")
+    st.caption(
+        "Warm in-process timing for one 168-hour request. Results are hardware-specific."
+    )
+    try:
+        summary = load_performance_summary(Path("artifacts/performance/summary.json"))
+    except FileNotFoundError:
+        st.info("Run `make performance` to generate local measurements.")
+        return
+    measurements = summary.get("measurements")
+    if not isinstance(measurements, list) or not measurements:
+        st.info("The local performance summary does not contain measurements.")
+        return
+    table = pd.DataFrame(measurements)
+    table["Model"] = table[Col.MODEL].map(display_model)
+    chart = go.Figure(
+        go.Bar(
+            x=table["prediction_median_ms"],
+            y=table["Model"],
+            orientation="h",
+            marker_color=[
+                MODEL_COLORS.get(str(model), MUTED) for model in table[Col.MODEL]
+            ],
+            text=[f"{value:.3f} ms" for value in table["prediction_median_ms"]],
+            textposition="outside",
+        )
+    )
+    chart.update_layout(title="Median weekly inference latency", showlegend=False)
+    chart.update_xaxes(title="Milliseconds")
+    st.plotly_chart(
+        _chart_layout(chart, 390),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    display = table.rename(
+        columns={
+            "fit_time_ms": "Fit (ms)",
+            "prediction_p95_ms": "P95 (ms)",
+            "serialized_model_kib": "Model (KiB)",
+            "fit_rss_delta_mib": "Fit RSS delta (MiB)",
+        }
+    )
+    st.dataframe(
+        display[
+            [
+                "Model",
+                "Fit (ms)",
+                "P95 (ms)",
+                "Model (KiB)",
+                "Fit RSS delta (MiB)",
+            ]
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+
+
 def _inject_styles() -> None:
     st.markdown(
         """
@@ -489,7 +549,13 @@ def main() -> None:
         st.caption("Forecast intelligence console")
         section = st.radio(
             "Navigate",
-            ["Overview", "Point forecasts", "Uncertainty", "Methodology"],
+            [
+                "Overview",
+                "Point forecasts",
+                "Uncertainty",
+                "Performance",
+                "Methodology",
+            ],
             label_visibility="collapsed",
         )
         st.divider()
@@ -504,6 +570,7 @@ def main() -> None:
         "Overview": lambda: _render_overview(data),
         "Point forecasts": lambda: _render_point_forecasts(data),
         "Uncertainty": lambda: _render_uncertainty(data),
+        "Performance": _render_performance,
         "Methodology": _render_methodology,
     }
     renderers[section]()

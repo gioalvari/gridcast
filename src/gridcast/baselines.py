@@ -48,7 +48,7 @@ class SeasonalNaiveForecaster:
         if not np.isfinite(history).all():
             msg = "training history must contain only finite values"
             raise ValueError(msg)
-        self._history = history.copy()
+        self._history = history[-self.seasonal_period :].copy()
         return self
 
     def predict(self, horizon: int) -> NDArray[np.float64]:

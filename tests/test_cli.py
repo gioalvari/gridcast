@@ -118,3 +118,38 @@ def test_probabilistic_command_writes_calibrated_metrics(tmp_path: Path) -> None
     metrics = pd.read_csv(output_path / "metrics.csv")
     assert set(metrics["split"]) == {"validation", "test"}
     assert metrics["calibrated_coverage"].between(0.0, 1.0).all()
+
+
+def test_performance_command_writes_measurements(tmp_path: Path) -> None:
+    input_path = tmp_path / "load.parquet"
+    weather_path = tmp_path / "weather.parquet"
+    output_path = tmp_path / "performance"
+    data = generate_synthetic_load(periods=24 * 400, start="2017-01-01")
+    data.to_parquet(input_path, index=False)
+    data[[Col.TIMESTAMP]].assign(**{Col.TEMPERATURE: 10.0}).to_parquet(
+        weather_path, index=False
+    )
+
+    exit_status = main(
+        [
+            "performance",
+            "--input",
+            str(input_path),
+            "--weather",
+            str(weather_path),
+            "--output-dir",
+            str(output_path),
+            "--max-train-hours",
+            str(24 * 380),
+            "--n-estimators",
+            "3",
+            "--warmup-runs",
+            "1",
+            "--repetitions",
+            "2",
+        ]
+    )
+
+    assert exit_status == 0
+    measurements = pd.read_csv(output_path / "measurements.csv")
+    assert len(measurements) == 3
