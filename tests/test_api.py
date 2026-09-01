@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import httpx
@@ -297,3 +298,159 @@ async def test_decisions_endpoint_returns_optional_results(
 
     assert response.status_code == 200
     assert response.json()["point_models"][0]["model"] == "lightgbm"
+
+
+@pytest.mark.anyio
+async def test_foundation_endpoint_returns_optional_result(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {
+                    "model_name": "timesfm_2_5_200m_zero_shot",
+                    "model_id": "google/timesfm-2.5-200m-pytorch",
+                    "model_revision": "abc123",
+                    "context_length": 1024,
+                    "horizon": 168,
+                    "holdout_folds": 52,
+                    "model_parameters": {"per_core_batch_size": 1},
+                },
+                "metrics": {
+                    "model": "timesfm_2_5_200m_zero_shot",
+                    "observations": 8736,
+                    "folds": 52,
+                    "mae": 1926.88,
+                    "rmse": 2740.02,
+                    "mase": 0.639,
+                    "p10_pinball_loss": 433.01,
+                    "p50_pinball_loss": 963.44,
+                    "p90_pinball_loss": 459.82,
+                    "raw_80_coverage": 0.749,
+                    "raw_80_mean_width_mw": 5455.59,
+                },
+                "timing": {
+                    "first_call_seconds": 51.88,
+                    "warm_call_seconds": 9.34,
+                },
+                "environment": {
+                    "python": "3.12.12",
+                    "platform": "test-arm64",
+                    "torch": "2.13.0",
+                    "timesfm": "2.0.2",
+                    "device": "cpu",
+                    "checkpoint_sha256": "a" * 64,
+                    "timesfm_lock_sha256": "b" * 64,
+                    "installed_packages": {"timesfm": "2.0.2"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("gridcast.api_service.FOUNDATION_SUMMARY_PATH", summary_path)
+
+    response = await client.get("/api/v1/foundation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metrics"]["mae"] == pytest.approx(1926.88)
+    assert payload["horizon"] == 168
+    assert payload["model_parameters"]["per_core_batch_size"] == 1
+    assert payload["timing"]["warm_call_seconds"] == pytest.approx(9.34)
+    assert "installed_packages" not in payload["environment"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "contents",
+    [
+        None,
+        "not JSON",
+        "{}",
+        json.dumps(
+            {
+                "config": {
+                    "model_name": "timesfm_2_5_200m_zero_shot",
+                    "model_id": "model",
+                    "model_revision": "revision",
+                    "context_length": 1024,
+                    "horizon": 168,
+                    "holdout_folds": 2,
+                    "model_parameters": {},
+                },
+                "metrics": {
+                    "model": "timesfm_2_5_200m_zero_shot",
+                    "observations": 168,
+                    "folds": 2,
+                    "mae": 1.0,
+                    "rmse": 1.0,
+                    "mase": 1.0,
+                    "p10_pinball_loss": 1.0,
+                    "p50_pinball_loss": 1.0,
+                    "p90_pinball_loss": 1.0,
+                    "raw_80_coverage": 0.8,
+                    "raw_80_mean_width_mw": 1.0,
+                },
+                "timing": {
+                    "first_call_seconds": 1.0,
+                    "warm_call_seconds": 1.0,
+                },
+                "environment": {},
+            }
+        ),
+        """
+        {
+          "config": {
+            "model_name": "timesfm_2_5_200m_zero_shot",
+            "model_id": "model",
+            "model_revision": "revision",
+            "context_length": 1024,
+            "horizon": 168,
+            "holdout_folds": 1,
+            "model_parameters": {}
+          },
+          "metrics": {
+            "model": "timesfm_2_5_200m_zero_shot",
+            "observations": 168,
+            "folds": 1,
+            "mae": 1.0,
+            "rmse": 1.0,
+            "mase": 1.0,
+            "p10_pinball_loss": 1.0,
+            "p50_pinball_loss": 1.0,
+            "p90_pinball_loss": 1.0,
+            "raw_80_coverage": 0.8,
+            "raw_80_mean_width_mw": 1.0
+          },
+          "timing": {"first_call_seconds": 1.0, "warm_call_seconds": 1.0},
+          "environment": {
+            "python": "3.12.12",
+            "platform": "test-arm64",
+            "torch": "2.13.0",
+            "timesfm": "2.0.2",
+            "device": "cpu",
+            "checkpoint_sha256": "CHECKPOINT_DIGEST",
+            "timesfm_lock_sha256": "LOCK_DIGEST",
+            "installed_packages": {"bad": NaN}
+          }
+        }
+        """.replace("CHECKPOINT_DIGEST", "a" * 64).replace("LOCK_DIGEST", "b" * 64),
+    ],
+)
+async def test_foundation_endpoint_handles_missing_or_invalid_artifact(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: str | None,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    if contents is not None:
+        summary_path.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.FOUNDATION_SUMMARY_PATH", summary_path)
+
+    response = await client.get("/api/v1/foundation")
+
+    assert response.status_code == (404 if contents is None else 503)

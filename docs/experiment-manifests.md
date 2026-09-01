@@ -4,6 +4,7 @@ GridCast benchmark commands emit `experiment_manifest.json` beside their result
 artifacts. The manifest makes each result traceable to:
 
 - the current Git commit SHA;
+- dirty-worktree state and a digest of tracked and untracked changes;
 - UTC generation time;
 - Python and platform versions;
 - the `uv.lock` SHA-256 digest;
@@ -17,11 +18,15 @@ Generate manifests with:
 ```bash
 make benchmark
 make probabilistic
+make timesfm
 ```
 
 Dataset files remain ignored and are not redistributed. Their deterministic
 digests let two local runs confirm identical normalized inputs without
 publishing those inputs.
 
-The manifest records the checked-out commit. A dirty worktree can still produce
-a manifest, so publication-quality runs should use a clean committed revision.
+The TimesFM manifest additionally records its immutable checkpoint revision,
+weights digest, CPU runtime environment, and dedicated dependency-lock digest.
+The manifest records the checked-out commit and worktree state. A dirty worktree
+can still produce a manifest, so publication-quality runs should use a clean
+committed revision.

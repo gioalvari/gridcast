@@ -18,6 +18,12 @@ to the stronger daily seasonal-naive baseline and **2.38%** relative to base
 LightGBM. The daily baseline still wins the most individual weeks, so the result
 is reported as an aggregate improvement rather than universal superiority.
 
+An optional Apache-2.0 **TimesFM 2.5 200M zero-shot** benchmark reaches
+**1,926.88 MW MAE**, 33.59% below combined LightGBM without PJME training. This
+result is reported separately because overlap with broad foundation-model
+pretraining data cannot be ruled out. See
+[FOUNDATION_MODELS.md](FOUNDATION_MODELS.md).
+
 ## Why this project
 
 Forecasting examples often use random train/test splits, which leak future
@@ -172,6 +178,20 @@ synthetic penalties. It compares point-model schedules and tests whether using
 the cost-optimal quantile (P25/P50/P75) improves on always scheduling P50. See
 [DECISION_EVALUATION.md](DECISION_EVALUATION.md).
 
+## Pretrained TimesFM
+
+Run the pinned TimesFM 2.5 zero-shot benchmark on macOS 14+ Apple silicon in an
+isolated Python 3.12.12 environment:
+
+```bash
+make timesfm
+```
+
+The command downloads approximately 882 MiB of Apache-2.0 weights on first use.
+TimesFM and PyTorch are not part of the standard GridCast installation. TimesFM
+3.0 is intentionally excluded because its current pretrained weights use a
+non-commercial license.
+
 ## Interactive dashboard
 
 After generating the data and experiment artifacts, launch the portfolio UI:
@@ -186,6 +206,7 @@ The Streamlit dashboard opens at `http://localhost:8501` and provides:
 - the historical holdout leaderboard and model ablations;
 - an interactive weekly comparison of actuals and point forecasts;
 - calibrated probabilistic intervals and coverage diagnostics;
+- the optional TimesFM zero-shot benchmark and runtime metadata;
 - optional local fit, latency, size, and memory measurements;
 - a concise explanation of the anti-leakage evaluation contract.
 
@@ -213,9 +234,9 @@ make api
 
 OpenAPI documentation is available at `http://localhost:8000/docs`. The API
 exposes health, metadata, leaderboard, point-forecast, calibrated probabilistic
-forecast, decision-sensitivity, and optional local-performance endpoints. It
-returns `503` with setup instructions when core artifacts are unavailable and
-`404` if optional results have not been generated.
+forecast, decision-sensitivity, foundation-model, and optional local-performance
+endpoints. It returns `503` with setup instructions when core artifacts are
+unavailable and `404` if optional results have not been generated.
 
 Build the same service as a container:
 

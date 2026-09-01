@@ -1,17 +1,17 @@
-.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic performance dashboard api docker-build full clean
+.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic timesfm timesfm-lock performance dashboard api docker-build full clean
 
 install:
 	uv sync --all-extras
 	uv pip install -e .
 
 check:
-	uv run ruff check src/ tests/
-	uv run ruff format --check src/ tests/
+	uv run ruff check src/ tests/ scripts/
+	uv run ruff format --check src/ tests/ scripts/
 	uv run mypy src/
 
 format:
-	uv run ruff check --fix src/ tests/
-	uv run ruff format src/ tests/
+	uv run ruff check --fix src/ tests/ scripts/
+	uv run ruff format src/ tests/ scripts/
 
 test:
 	uv run pytest
@@ -39,6 +39,24 @@ benchmark:
 
 probabilistic:
 	uv run gridcast probabilistic
+
+timesfm:
+	@test "$$(uname -s)-$$(uname -m)" = "Darwin-arm64" || \
+		{ printf '%s\n' 'TimesFM lock supports Apple silicon only.' >&2; exit 1; }
+	CUDA_VISIBLE_DEVICES="" uv run --isolated --locked --python 3.12.12 \
+		--with-requirements scripts/timesfm-requirements.txt \
+		scripts/run_timesfm.py
+
+timesfm-lock:
+	@test "$$(uname -s)-$$(uname -m)" = "Darwin-arm64" || \
+		{ printf '%s\n' 'TimesFM lock supports Apple silicon only.' >&2; exit 1; }
+	MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile \
+		scripts/timesfm-requirements.in \
+		--python 3.12.12 \
+		--python-platform aarch64-apple-darwin \
+		--generate-hashes \
+		--output-file scripts/timesfm-requirements.txt \
+		--custom-compile-command 'make timesfm-lock'
 
 performance:
 	uv run gridcast performance

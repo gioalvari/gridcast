@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from gridcast.api_models import FoundationSummary
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import (
     DashboardData,
@@ -532,6 +533,75 @@ def _render_decisions() -> None:
     )
 
 
+def _render_foundation(data: DashboardData) -> None:
+    st.markdown("## Zero-shot foundation model")
+    path = Path("artifacts/foundation/timesfm-2.5-200m/summary.json")
+    if not path.exists():
+        st.info("Run `make timesfm` to generate the optional zero-shot benchmark.")
+        return
+    try:
+        summary = FoundationSummary.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as error:
+        st.info(f"The foundation-model summary is invalid: {error}")
+        return
+    st.caption(
+        "TimesFM 2.5 200M · Apache-2.0 weights · no PJME training · "
+        f"{summary.config.context_length:,}-hour context"
+    )
+    comparison_rows = [
+        {"Model": "TimesFM 2.5 zero-shot", "MAE (MW)": summary.metrics.mae}
+    ]
+    holdout = data.leaderboard.loc[
+        data.leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+    ]
+    for model in ("lightgbm_exogenous", "seasonal_naive_24h"):
+        rows = holdout.loc[holdout[Col.MODEL].eq(model)]
+        if not rows.empty:
+            comparison_rows.append(
+                {
+                    "Model": display_model(model),
+                    "MAE (MW)": float(rows.iloc[0]["mae"]),
+                }
+            )
+    comparison = pd.DataFrame(comparison_rows)
+    chart = go.Figure(
+        go.Bar(
+            x=comparison["MAE (MW)"],
+            y=comparison["Model"],
+            orientation="h",
+            marker_color=[ORANGE, CYAN, "#5969A6"][: len(comparison)],
+            text=[f"{value:,.0f}" for value in comparison["MAE (MW)"]],
+            textposition="outside",
+        )
+    )
+    chart.update_layout(title="Historical holdout MAE", showlegend=False)
+    chart.update_xaxes(title="MAE (MW)")
+    chart.update_yaxes(autorange="reversed")
+    st.plotly_chart(
+        _chart_layout(chart, 390),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    columns = st.columns(4)
+    columns[0].metric("MAE", _format_mw(summary.metrics.mae))
+    columns[1].metric("MASE", f"{summary.metrics.mase:.3f}")
+    columns[2].metric("Raw 80% coverage", f"{summary.metrics.raw_80_coverage:.1%}")
+    columns[3].metric(
+        f"{summary.config.holdout_folds}-fold warm inference",
+        f"{summary.timing.warm_call_seconds:.2f} s",
+    )
+    st.caption(
+        "First call including lazy compilation: "
+        f"{summary.timing.first_call_seconds:.2f} s. "
+        "Warm timing excludes model loading and weight download."
+    )
+    st.warning(
+        "Pretraining overlap with public energy series cannot be ruled out; this is not an untouched benchmark."
+    )
+
+
 def _inject_styles() -> None:
     st.markdown(
         """
@@ -614,6 +684,7 @@ def main() -> None:
                 "Point forecasts",
                 "Uncertainty",
                 "Decisions",
+                "Foundation model",
                 "Performance",
                 "Methodology",
             ],
@@ -632,6 +703,7 @@ def main() -> None:
         "Point forecasts": lambda: _render_point_forecasts(data),
         "Uncertainty": lambda: _render_uncertainty(data),
         "Decisions": _render_decisions,
+        "Foundation model": lambda: _render_foundation(data),
         "Performance": _render_performance,
         "Methodology": _render_methodology,
     }

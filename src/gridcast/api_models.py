@@ -1,12 +1,19 @@
 from datetime import datetime
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class APIModel(BaseModel):
     """Base API model with strict response serialization."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class StrictArtifactModel(APIModel):
+    """Base model for generated artifacts without implicit coercion."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
 
 class HealthResponse(APIModel):
@@ -246,3 +253,99 @@ class DecisionResponse(APIModel):
 
     point_models: list[PointDecisionResult]
     quantile_schedules: list[QuantileDecisionResult]
+
+
+class FoundationMetrics(StrictArtifactModel):
+    """Zero-shot foundation-model historical holdout metrics."""
+
+    model: str
+    observations: int = Field(ge=1)
+    folds: int = Field(ge=1)
+    mae: float = Field(ge=0.0)
+    rmse: float = Field(ge=0.0)
+    mase: float = Field(ge=0.0)
+    p10_pinball_loss: float = Field(ge=0.0)
+    p50_pinball_loss: float = Field(ge=0.0)
+    p90_pinball_loss: float = Field(ge=0.0)
+    raw_80_coverage: float = Field(ge=0.0, le=1.0)
+    raw_80_mean_width_mw: float = Field(ge=0.0)
+
+
+class FoundationTiming(StrictArtifactModel):
+    """First-call and warm timings for the foundation-model benchmark."""
+
+    first_call_seconds: float = Field(ge=0.0)
+    warm_call_seconds: float = Field(ge=0.0)
+
+
+class FoundationConfigMetadata(StrictArtifactModel):
+    """Fully resolved foundation-model benchmark configuration."""
+
+    model_name: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    model_revision: str = Field(min_length=1)
+    context_length: int = Field(ge=1)
+    horizon: int = Field(ge=1)
+    holdout_folds: int = Field(ge=1)
+    model_parameters: dict[str, bool | int]
+
+
+class FoundationEnvironment(StrictArtifactModel):
+    """Reproducible runtime metadata for a foundation-model benchmark."""
+
+    python: str = Field(min_length=1)
+    platform: str = Field(min_length=1)
+    torch: str = Field(min_length=1)
+    timesfm: str = Field(min_length=1)
+    device: Literal["cpu"]
+    checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    timesfm_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    installed_packages: dict[str, str]
+
+
+class FoundationRuntime(StrictArtifactModel):
+    """Stable public subset of foundation-model runtime metadata."""
+
+    python: str = Field(min_length=1)
+    platform: str = Field(min_length=1)
+    torch: str = Field(min_length=1)
+    timesfm: str = Field(min_length=1)
+    device: Literal["cpu"]
+    checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    timesfm_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FoundationSummary(StrictArtifactModel):
+    """Validated on-disk foundation-model benchmark summary."""
+
+    config: FoundationConfigMetadata
+    metrics: FoundationMetrics
+    timing: FoundationTiming
+    environment: FoundationEnvironment
+
+    @model_validator(mode="after")
+    def validate_dimensions(self) -> Self:
+        """Ensure aggregate metrics match the configured benchmark dimensions."""
+        if self.metrics.model != self.config.model_name:
+            raise ValueError("foundation model names do not match")
+        if self.metrics.folds != self.config.holdout_folds:
+            raise ValueError("foundation fold counts do not match")
+        expected_observations = self.config.holdout_folds * self.config.horizon
+        if self.metrics.observations != expected_observations:
+            raise ValueError("foundation observation count does not match dimensions")
+        return self
+
+
+class FoundationResponse(APIModel):
+    """Optional foundation-model configuration, metrics, and runtime."""
+
+    model_name: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    model_revision: str = Field(min_length=1)
+    context_length: int = Field(ge=1)
+    horizon: int = Field(ge=1)
+    holdout_folds: int = Field(ge=1)
+    model_parameters: dict[str, bool | int]
+    timing: FoundationTiming
+    metrics: FoundationMetrics
+    environment: FoundationRuntime
