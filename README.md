@@ -11,17 +11,17 @@ one canonical energy-forecasting repository rather than two overlapping ones.
 
 ![Historical holdout model comparison](docs/assets/historical-holdout-mae.svg)
 
-On the 52-week historical holdout, the combined LightGBM model reduces MAE by
-**19.07%**
-relative to the weekly seasonal-naive baseline. The gain is **3.07%** relative
-to the stronger daily seasonal-naive baseline and **2.38%** relative to base
-LightGBM. The daily baseline still wins the most individual weeks, so the result
-is reported as an aggregate improvement rather than universal superiority.
+On the repeatedly inspected 52-week historical holdout, the combined LightGBM
+model has the lowest observed aggregate MAE: **19.07%** below the weekly
+seasonal-naive baseline, **3.07%** below the stronger daily seasonal-naive
+baseline, and **2.38%** below base LightGBM. The daily baseline wins the most
+individual weeks, and uncertainty around these small paired differences is not
+yet reported, so this is not a claim of reliable model superiority.
 
 An optional Apache-2.0 **TimesFM 2.5 200M zero-shot** benchmark reaches
-**1,926.88 MW MAE**, 33.59% below combined LightGBM without PJME training. This
-result is reported separately because overlap with broad foundation-model
-pretraining data cannot be ruled out. See
+**1,926.88 MW MAE**, 33.59% below combined LightGBM without task-specific PJME
+fine-tuning in GridCast. This result is reported separately because overlap with
+broad foundation-model pretraining data cannot be ruled out. See
 [FOUNDATION_MODELS.md](FOUNDATION_MODELS.md).
 
 ## Why this project
@@ -237,6 +237,8 @@ exposes health, metadata, leaderboard, point-forecast, calibrated probabilistic
 forecast, decision-sensitivity, foundation-model, and optional local-performance
 endpoints. It returns `503` with setup instructions when core artifacts are
 unavailable and `404` if optional results have not been generated.
+The `/health` endpoint reports process liveness, while `/ready` returns success
+only after the required core artifact bundle loads and validates.
 
 Build the same service as a container:
 

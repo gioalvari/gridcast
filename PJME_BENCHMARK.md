@@ -4,6 +4,7 @@ This report summarizes the reproducible output of:
 
 ```bash
 make data
+make weather
 make benchmark
 ```
 
@@ -35,11 +36,13 @@ weekly origin using only observations preceding that origin.
 | Weekly seasonal naive | 3,585.07 | 4,856.16 | 1.189 | baseline |
 | Persistence | 4,499.88 | 5,697.31 | 1.492 | -25.52% |
 
-The combined model has the lowest aggregate MAE, improving on the weekly naive
-baseline by 19.07%, the base LightGBM model by 2.38%, and the daily naive model
-by 3.07%. The weather-only ablation captures most of this gain. Holidays alone
-slightly worsen aggregate MAE, but combining holidays with weather improves the
-weather-only model by another 0.39%.
+The combined model has the lowest observed aggregate MAE: 19.07% below the
+weekly naive baseline, 2.38% below base LightGBM, and 3.07% below daily naive.
+The weather-only ablation captures most of this difference. Holidays alone
+slightly worsen aggregate MAE, while combining holidays with weather is 0.39%
+lower than weather-only. Dependence-aware uncertainty for these paired
+differences is not yet reported, so the small margins do not establish reliable
+superiority.
 
 ## Stability
 

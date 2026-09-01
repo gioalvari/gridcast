@@ -417,7 +417,7 @@ def _render_methodology() -> None:
         """
         <div class="method-grid">
           <article><span>01</span><h3>Chronological only</h3><p>No random split. Every forecast is strictly later than its training cutoff.</p></article>
-          <article><span>02</span><h3>Frozen final year</h3><p>Fifty-two weekly folds cover every season and remain separate from validation.</p></article>
+          <article><span>02</span><h3>Historical evaluation year</h3><p>Fifty-two weekly folds cover every season and remain separate from validation, but later experiments have inspected this period.</p></article>
           <article><span>03</span><h3>Weather without hindsight</h3><p>ERA5 enters through 168/336-hour lags and prior-year climatology, never realized future values.</p></article>
           <article><span>04</span><h3>Validation-only calibration</h3><p>The static conformal correction is learned on 12 validation folds before historical holdout evaluation.</p></article>
         </div>

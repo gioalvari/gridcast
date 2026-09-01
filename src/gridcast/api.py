@@ -37,7 +37,12 @@ def get_gridcast_service() -> GridCastService:
     GridCastService
         Read-only forecast service.
     """
-    return GridCastService(load_dashboard_data())
+    try:
+        return GridCastService(load_dashboard_data())
+    except MissingArtifactsError:
+        raise
+    except (OSError, ValueError) as error:
+        raise InvalidArtifactError(f"invalid core artifacts: {error}") from error
 
 
 @asynccontextmanager
@@ -96,6 +101,14 @@ async def invalid_artifact_handler(
 async def health() -> HealthResponse:
     """Return process-level health without loading forecast artifacts."""
     return HealthResponse(status="ok", service="gridcast", version="1.0.0")
+
+
+@app.get("/ready", response_model=HealthResponse, tags=["operations"])
+async def readiness(
+    _: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> HealthResponse:
+    """Return readiness only after core artifacts load and validate."""
+    return HealthResponse(status="ready", service="gridcast", version="1.0.0")
 
 
 @app.get("/api/v1/metadata", response_model=MetadataResponse, tags=["metadata"])

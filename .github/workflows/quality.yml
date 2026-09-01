@@ -13,5 +13,41 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
-      - run: uv sync --all-extras
+      - run: uv lock --check
+      - run: uv sync --frozen --all-extras
       - run: make full
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv build
+      - run: uv venv /tmp/gridcast-wheel --python 3.11
+      - run: uv pip install --python /tmp/gridcast-wheel/bin/python dist/*.whl
+      - run: /tmp/gridcast-wheel/bin/gridcast --help
+      - run: /tmp/gridcast-wheel/bin/python -c "import gridcast.api"
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: docker build --tag gridcast:ci .
+      - run: docker run --detach --name gridcast-ci --publish 8000:8000 gridcast:ci
+      - name: Check liveness and missing-artifact readiness
+        run: |
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/health
+          test "$(curl --silent --output /tmp/ready.json --write-out '%{http_code}' http://127.0.0.1:8000/ready)" = "503"
+      - if: failure()
+        run: docker logs gridcast-ci
+      - if: always()
+        run: docker rm --force gridcast-ci

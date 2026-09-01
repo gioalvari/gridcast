@@ -53,7 +53,8 @@ predicted values.
 The independently trained quantiles are substantially under-dispersed: their
 raw interval covers only 57.59% of observations despite an 80% nominal target.
 The validation-only conformal correction raises holdout coverage to 80.04%,
-showing that the calibration transfers well across the final year.
+showing transfer in annual marginal coverage. Coverage remains uneven across
+individual weeks and may also vary by season.
 
 This reliability has a cost. The calibrated interval is 53.8% wider than the
 raw interval. The plot for the latest holdout week also shows that a constant

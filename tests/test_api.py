@@ -124,6 +124,20 @@ async def test_health_does_not_require_artifacts(client: httpx.AsyncClient) -> N
 
 
 @pytest.mark.anyio
+async def test_readiness_requires_valid_core_artifacts(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "service": "gridcast",
+        "version": "1.0.0",
+    }
+
+
+@pytest.mark.anyio
 async def test_metadata_returns_evaluation_contract(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/v1/metadata")
 
@@ -202,10 +216,34 @@ async def test_missing_artifacts_return_service_unavailable(
         raise MissingArtifactsError(f"missing artifacts under {tmp_path}")
 
     app.dependency_overrides[get_gridcast_service] = unavailable
-    response = await client.get("/api/v1/metadata")
+    response = await client.get("/ready")
 
     assert response.status_code == 503
     assert "missing artifacts" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_invalid_core_artifacts_return_service_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def invalid() -> DashboardData:
+        raise ValueError("invalid leaderboard schema")
+
+    app.dependency_overrides.clear()
+    get_gridcast_service.cache_clear()
+    monkeypatch.setattr("gridcast.api.load_dashboard_data", invalid)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as invalid_client:
+        response = await invalid_client.get("/ready")
+    get_gridcast_service.cache_clear()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "invalid core artifacts: invalid leaderboard schema"
+    )
 
 
 @pytest.mark.anyio
