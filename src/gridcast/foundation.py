@@ -55,6 +55,8 @@ class FoundationConfig:
         Public checkpoint identifier.
     model_revision : str
         Immutable checkpoint revision.
+    weights_license : str
+        Required keyword-only license identifier for the pretrained weights.
     context_length : int, default=1024
         Historical observations supplied to each forecast origin.
     horizon : int, default=168
@@ -71,12 +73,15 @@ class FoundationConfig:
     context_length: int = 1024
     horizon: int = 24 * 7
     holdout_folds: int = 52
-    model_parameters: dict[str, bool | int] = field(default_factory=dict)
+    model_parameters: dict[str, bool | int | float | str] = field(default_factory=dict)
+    weights_license: str = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate zero-shot benchmark settings."""
-        if not self.model_name or not self.model_id or not self.model_revision:
-            msg = "model_name, model_id, and model_revision are required"
+        if not all(
+            (self.model_name, self.model_id, self.model_revision, self.weights_license)
+        ):
+            msg = "model identity, revision, and weights license are required"
             raise ValueError(msg)
         if min(self.context_length, self.horizon, self.holdout_folds) < 1:
             msg = "context, horizon, and holdout folds must be positive"
@@ -264,7 +269,11 @@ def write_foundation_artifacts(
     holdout = result.forecasts
     write_manifest(
         build_experiment_manifest(
-            "pjme-timesfm-zero-shot",
+            (
+                "pjme-timesfm-zero-shot"
+                if config.model_name == "timesfm_2_5_200m_zero_shot"
+                else f"pjme-{config.model_name.replace('_', '-')}"
+            ),
             asdict(config),
             {"load": data},
             features=[f"target_context_{config.context_length}h"],

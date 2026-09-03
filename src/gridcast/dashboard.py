@@ -16,6 +16,12 @@ from gridcast.dashboard_data import (
     load_dashboard_data,
     probabilistic_week,
 )
+from gridcast.foundation_models import (
+    TIMESFM_2P5,
+    TIMESFM_3,
+    FoundationModelIdentity,
+    validate_foundation_identity,
+)
 from gridcast.performance import load_performance_summary
 
 INK = "#17242B"
@@ -534,24 +540,50 @@ def _render_decisions() -> None:
 
 
 def _render_foundation(data: DashboardData) -> None:
-    st.markdown("## Zero-shot foundation model")
-    path = Path("artifacts/foundation/timesfm-2.5-200m/summary.json")
-    if not path.exists():
-        st.info("Run `make timesfm` to generate the optional zero-shot benchmark.")
-        return
-    try:
-        summary = FoundationSummary.model_validate_json(
-            path.read_text(encoding="utf-8")
+    st.markdown("## Zero-shot foundation models")
+    candidates = [
+        (
+            "TimesFM 2.5 200M",
+            Path("artifacts/foundation/timesfm-2.5-200m/summary.json"),
+            TIMESFM_2P5,
+        ),
+        (
+            "TimesFM 3.0",
+            Path("artifacts/foundation/timesfm-3.0/summary.json"),
+            TIMESFM_3,
+        ),
+    ]
+    summaries: list[tuple[str, FoundationSummary]] = []
+    for label, path, expected in candidates:
+        if not path.exists():
+            continue
+        try:
+            summary = FoundationSummary.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+            _validate_foundation_identity(summary, expected)
+            summaries.append((label, summary))
+        except (OSError, ValueError) as error:
+            st.info(f"The {label} summary is invalid: {error}")
+    if not summaries:
+        st.info(
+            "Run `make timesfm` for TimesFM 2.5 or read the non-commercial "
+            "TimesFM 3 license before running `make timesfm3`."
         )
-    except (OSError, ValueError) as error:
-        st.info(f"The foundation-model summary is invalid: {error}")
         return
+    selected_label = st.selectbox(
+        "Foundation checkpoint",
+        [label for label, _ in summaries],
+    )
+    summary = next(value for label, value in summaries if label == selected_label)
     st.caption(
-        "TimesFM 2.5 200M · Apache-2.0 weights · no PJME training · "
+        f"{selected_label} · {summary.config.weights_license} weights · "
+        "no task-specific PJME fine-tuning · "
         f"{summary.config.context_length:,}-hour context"
     )
     comparison_rows = [
-        {"Model": "TimesFM 2.5 zero-shot", "MAE (MW)": summary.metrics.mae}
+        {"Model": f"{label} zero-shot", "MAE (MW)": value.metrics.mae}
+        for label, value in summaries
     ]
     holdout = data.leaderboard.loc[
         data.leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
@@ -571,7 +603,7 @@ def _render_foundation(data: DashboardData) -> None:
             x=comparison["MAE (MW)"],
             y=comparison["Model"],
             orientation="h",
-            marker_color=[ORANGE, CYAN, "#5969A6"][: len(comparison)],
+            marker_color=[ORANGE, "#8C4CCB", CYAN, "#5969A6"][: len(comparison)],
             text=[f"{value:,.0f}" for value in comparison["MAE (MW)"]],
             textposition="outside",
         )
@@ -598,8 +630,32 @@ def _render_foundation(data: DashboardData) -> None:
         "Warm timing excludes model loading and weight download."
     )
     st.warning(
-        "Pretraining overlap with public energy series cannot be ruled out; this is not an untouched benchmark."
+        "Pretraining overlap with public energy series cannot be ruled out; this "
+        "is not an untouched benchmark."
     )
+    if summary.config.model_name == TIMESFM_3.model_name:
+        st.warning(
+            "TimesFM 3 weights are non-commercial and must not be used in production."
+        )
+
+
+def _validate_foundation_identity(
+    summary: FoundationSummary,
+    expected: FoundationModelIdentity,
+) -> None:
+    validate_foundation_identity(summary.config, expected)
+    if summary.environment.timesfm != expected.package_version:
+        raise ValueError("foundation package version does not match checkpoint")
+    if (
+        expected.checkpoint_sha256 is not None
+        and summary.environment.checkpoint_sha256 != expected.checkpoint_sha256
+    ):
+        raise ValueError("foundation checkpoint digest does not match checkpoint")
+    if (
+        expected.config_sha256 is not None
+        and summary.environment.checkpoint_config_sha256 != expected.config_sha256
+    ):
+        raise ValueError("foundation configuration digest does not match checkpoint")
 
 
 def _inject_styles() -> None:

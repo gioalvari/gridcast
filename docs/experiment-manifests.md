@@ -19,14 +19,16 @@ Generate manifests with:
 make benchmark
 make probabilistic
 make timesfm
+make timesfm3
 ```
 
 Dataset files remain ignored and are not redistributed. Their deterministic
 digests let two local runs confirm identical normalized inputs without
 publishing those inputs.
 
-The TimesFM manifest additionally records its immutable checkpoint revision,
-weights digest, CPU runtime environment, and dedicated dependency-lock digest.
+Foundation-model manifests additionally record immutable checkpoint revisions,
+weights digests, CPU runtime environments, and dedicated dependency-lock
+digests. TimesFM 3 also verifies and records its checkpoint configuration digest.
 The manifest records the checked-out commit and worktree state. A dirty worktree
 can still produce a manifest, so publication-quality runs should use a clean
 committed revision.

@@ -9,6 +9,7 @@ from gridcast.api import app, get_gridcast_service
 from gridcast.api_service import GridCastService
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, MissingArtifactsError
+from gridcast.foundation_models import TIMESFM_2P5, TIMESFM_3
 
 
 def _service() -> GridCastService:
@@ -349,16 +350,16 @@ async def test_foundation_endpoint_returns_optional_result(
         json.dumps(
             {
                 "config": {
-                    "model_name": "timesfm_2_5_200m_zero_shot",
-                    "model_id": "google/timesfm-2.5-200m-pytorch",
-                    "model_revision": "abc123",
+                    "model_name": TIMESFM_2P5.model_name,
+                    "model_id": TIMESFM_2P5.model_id,
+                    "model_revision": TIMESFM_2P5.model_revision,
                     "context_length": 1024,
                     "horizon": 168,
                     "holdout_folds": 52,
                     "model_parameters": {"per_core_batch_size": 1},
                 },
                 "metrics": {
-                    "model": "timesfm_2_5_200m_zero_shot",
+                    "model": TIMESFM_2P5.model_name,
                     "observations": 8736,
                     "folds": 52,
                     "mae": 1926.88,
@@ -381,7 +382,7 @@ async def test_foundation_endpoint_returns_optional_result(
                     "timesfm": "2.0.2",
                     "device": "cpu",
                     "checkpoint_sha256": "a" * 64,
-                    "timesfm_lock_sha256": "b" * 64,
+                    "dependency_lock_sha256": "b" * 64,
                     "installed_packages": {"timesfm": "2.0.2"},
                 },
             }
@@ -396,9 +397,11 @@ async def test_foundation_endpoint_returns_optional_result(
     payload = response.json()
     assert payload["metrics"]["mae"] == pytest.approx(1926.88)
     assert payload["horizon"] == 168
+    assert payload["weights_license"] == "Apache-2.0"
     assert payload["model_parameters"]["per_core_batch_size"] == 1
     assert payload["timing"]["warm_call_seconds"] == pytest.approx(9.34)
     assert "installed_packages" not in payload["environment"]
+    assert payload["environment"]["timesfm_lock_sha256"] == "b" * 64
 
 
 @pytest.mark.anyio
@@ -471,7 +474,7 @@ async def test_foundation_endpoint_returns_optional_result(
             "timesfm": "2.0.2",
             "device": "cpu",
             "checkpoint_sha256": "CHECKPOINT_DIGEST",
-            "timesfm_lock_sha256": "LOCK_DIGEST",
+            "dependency_lock_sha256": "LOCK_DIGEST",
             "installed_packages": {"bad": NaN}
           }
         }
@@ -492,3 +495,94 @@ async def test_foundation_endpoint_handles_missing_or_invalid_artifact(
     response = await client.get("/api/v1/foundation")
 
     assert response.status_code == (404 if contents is None else 503)
+
+
+@pytest.mark.anyio
+async def test_timesfm3_endpoint_returns_not_found_without_artifact(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "gridcast.api_service.FOUNDATION3_SUMMARY_PATH",
+        tmp_path / "summary.json",
+    )
+
+    response = await client.get("/api/v1/foundation/timesfm-3.0")
+
+    assert response.status_code == 404
+    assert "make timesfm3" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid_field", [None, "model_name", "checkpoint", "config"])
+async def test_timesfm3_endpoint_validates_checkpoint_identity(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_field: str | None,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    model_name = (
+        TIMESFM_2P5.model_name
+        if invalid_field == "model_name"
+        else TIMESFM_3.model_name
+    )
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {
+                    "model_name": model_name,
+                    "model_id": TIMESFM_3.model_id,
+                    "model_revision": TIMESFM_3.model_revision,
+                    "weights_license": TIMESFM_3.weights_license,
+                    "context_length": 1024,
+                    "horizon": 168,
+                    "holdout_folds": 1,
+                    "model_parameters": {"per_core_batch_size": 1},
+                },
+                "metrics": {
+                    "model": model_name,
+                    "observations": 168,
+                    "folds": 1,
+                    "mae": 1.0,
+                    "rmse": 1.0,
+                    "mase": 1.0,
+                    "p10_pinball_loss": 1.0,
+                    "p50_pinball_loss": 1.0,
+                    "p90_pinball_loss": 1.0,
+                    "raw_80_coverage": 0.8,
+                    "raw_80_mean_width_mw": 1.0,
+                },
+                "timing": {
+                    "first_call_seconds": 1.0,
+                    "warm_call_seconds": 1.0,
+                },
+                "environment": {
+                    "python": "3.12.12",
+                    "platform": "test-arm64",
+                    "torch": "2.13.0",
+                    "timesfm": "3.0.0",
+                    "device": "cpu",
+                    "checkpoint_sha256": (
+                        "a" * 64
+                        if invalid_field == "checkpoint"
+                        else TIMESFM_3.checkpoint_sha256
+                    ),
+                    "checkpoint_config_sha256": (
+                        "b" * 64
+                        if invalid_field == "config"
+                        else TIMESFM_3.config_sha256
+                    ),
+                    "dependency_lock_sha256": "b" * 64,
+                    "installed_packages": {"timesfm": "3.0.0"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("gridcast.api_service.FOUNDATION3_SUMMARY_PATH", summary_path)
+
+    response = await client.get("/api/v1/foundation/timesfm-3.0")
+
+    assert response.status_code == (200 if invalid_field is None else 503)
