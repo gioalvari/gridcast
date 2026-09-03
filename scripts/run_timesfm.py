@@ -19,10 +19,11 @@ from gridcast.foundation import (
     run_foundation_benchmark,
     write_foundation_artifacts,
 )
+from gridcast.foundation_models import TIMESFM_2P5
 from gridcast.provenance import file_sha256
 
-MODEL_ID = "google/timesfm-2.5-200m-pytorch"
-MODEL_REVISION = "1d952420fba87f3c6dee4f240de0f1a0fbc790e3"
+MODEL_ID = TIMESFM_2P5.model_id
+MODEL_REVISION = TIMESFM_2P5.model_revision
 SUPPORTED_PYTHON = "3.12.12"
 
 
@@ -147,9 +148,10 @@ def main() -> int:
     if settings.per_core_batch_size < 1:
         parser.error("--per-core-batch-size must be positive")
     config = FoundationConfig(
-        model_name="timesfm_2_5_200m_zero_shot",
+        model_name=TIMESFM_2P5.model_name,
         model_id=MODEL_ID,
         model_revision=MODEL_REVISION,
+        weights_license=TIMESFM_2P5.weights_license,
         context_length=args.context_length,
         horizon=args.horizon,
         holdout_folds=args.holdout_folds,
@@ -181,7 +183,7 @@ def main() -> int:
             "timesfm": version("timesfm"),
             "device": forecaster.device,
             "checkpoint_sha256": _required_digest(checkpoint),
-            "timesfm_lock_sha256": _required_digest(
+            "dependency_lock_sha256": _required_digest(
                 Path("scripts/timesfm-requirements.txt")
             ),
             "installed_packages": _installed_packages(),

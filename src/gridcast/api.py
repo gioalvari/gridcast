@@ -201,3 +201,15 @@ async def foundation(
 ) -> FoundationResponse:
     """Return optional zero-shot foundation-model benchmark results."""
     return await service.foundation()
+
+
+@app.get(
+    "/api/v1/foundation/timesfm-3.0",
+    response_model=FoundationResponse,
+    tags=["forecasts"],
+)
+async def foundation3(
+    service: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> FoundationResponse:
+    """Return optional non-commercial TimesFM 3 benchmark results."""
+    return await service.foundation3()

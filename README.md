@@ -12,7 +12,8 @@ one canonical energy-forecasting repository rather than two overlapping ones.
 ![Historical holdout model comparison](docs/assets/historical-holdout-mae.svg)
 
 On the repeatedly inspected 52-week historical holdout, the combined LightGBM
-model has the lowest observed aggregate MAE: **19.07%** below the weekly
+model has the lowest observed aggregate MAE among task-trained and classical
+models: **19.07%** below the weekly
 seasonal-naive baseline, **3.07%** below the stronger daily seasonal-naive
 baseline, and **2.38%** below base LightGBM. The daily baseline wins the most
 individual weeks, and uncertainty around these small paired differences is not
@@ -23,6 +24,13 @@ An optional Apache-2.0 **TimesFM 2.5 200M zero-shot** benchmark reaches
 fine-tuning in GridCast. This result is reported separately because overlap with
 broad foundation-model pretraining data cannot be ruled out. See
 [FOUNDATION_MODELS.md](FOUNDATION_MODELS.md).
+
+GridCast also includes an optional TimesFM 3.0 research adapter. Its pretrained
+weights have a separate non-commercial license, are never redistributed, and
+are excluded from production-oriented claims and defaults.
+On the same historical holdout, it reaches **1,763.63 MW MAE** and **80.11%** raw
+P10-P90 coverage, but the repeatedly inspected period and possible pretraining
+overlap prevent an untouched generalization claim.
 
 ## Why this project
 
@@ -188,9 +196,10 @@ make timesfm
 ```
 
 The command downloads approximately 882 MiB of Apache-2.0 weights on first use.
-TimesFM and PyTorch are not part of the standard GridCast installation. TimesFM
-3.0 is intentionally excluded because its current pretrained weights use a
-non-commercial license.
+TimesFM and PyTorch are not part of the standard GridCast installation. An
+optional `make timesfm3` research benchmark is also available after reading its
+separate non-commercial, non-production weights license. GridCast does not
+redistribute either checkpoint.
 
 ## Interactive dashboard
 

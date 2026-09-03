@@ -43,6 +43,7 @@ def _config() -> FoundationConfig:
         model_name="example_model",
         model_id="example/model",
         model_revision="abc123",
+        weights_license="Apache-2.0",
         context_length=24 * 7,
         horizon=24,
         holdout_folds=2,
@@ -89,18 +90,27 @@ def test_foundation_benchmark_generates_point_and_quantile_metrics(
         "summary.json",
     }
     report = json.loads((tmp_path / "summary.json").read_text())
+    manifest = json.loads((tmp_path / "experiment_manifest.json").read_text())
     assert report["config"]["model_revision"] == "abc123"
+    assert report["config"]["weights_license"] == "Apache-2.0"
     assert report["timing"]["warm_call_seconds"] >= 0.0
+    assert manifest["experiment"] == "pjme-example-model"
 
 
 def test_foundation_config_and_history_are_validated() -> None:
     with pytest.raises(ValueError, match="required"):
-        FoundationConfig(model_name="model", model_id="", model_revision="revision")
+        FoundationConfig(
+            model_name="model",
+            model_id="",
+            model_revision="revision",
+            weights_license="Apache-2.0",
+        )
     with pytest.raises(ValueError, match="positive"):
         FoundationConfig(
             model_name="model",
             model_id="model",
             model_revision="revision",
+            weights_license="Apache-2.0",
             holdout_folds=0,
         )
     data = generate_synthetic_load(periods=24 * 14)
@@ -111,6 +121,7 @@ def test_foundation_config_and_history_are_validated() -> None:
                 model_name="model",
                 model_id="model",
                 model_revision="revision",
+                weights_license="Apache-2.0",
                 context_length=24 * 14,
                 horizon=24,
                 holdout_folds=2,

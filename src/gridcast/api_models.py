@@ -3,6 +3,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from gridcast.foundation_models import TIMESFM_2P5
+
 
 class APIModel(BaseModel):
     """Base API model with strict response serialization."""
@@ -284,10 +286,29 @@ class FoundationConfigMetadata(StrictArtifactModel):
     model_name: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
     model_revision: str = Field(min_length=1)
+    weights_license: str = Field(default="unspecified", min_length=1)
     context_length: int = Field(ge=1)
     horizon: int = Field(ge=1)
     holdout_folds: int = Field(ge=1)
-    model_parameters: dict[str, bool | int]
+    model_parameters: dict[str, bool | int | float | str]
+
+    @model_validator(mode="after")
+    def resolve_legacy_license(self) -> Self:
+        """Resolve the known TimesFM 2.5 license in legacy summaries."""
+        if self.weights_license != "unspecified":
+            return self
+        if (
+            self.model_name,
+            self.model_id,
+            self.model_revision,
+        ) == (
+            TIMESFM_2P5.model_name,
+            TIMESFM_2P5.model_id,
+            TIMESFM_2P5.model_revision,
+        ):
+            self.weights_license = TIMESFM_2P5.weights_license
+            return self
+        raise ValueError("foundation weights license is required")
 
 
 class FoundationEnvironment(StrictArtifactModel):
@@ -299,8 +320,32 @@ class FoundationEnvironment(StrictArtifactModel):
     timesfm: str = Field(min_length=1)
     device: Literal["cpu"]
     checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    timesfm_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpoint_config_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    dependency_lock_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    timesfm_lock_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     installed_packages: dict[str, str]
+
+    @model_validator(mode="after")
+    def validate_dependency_lock(self) -> Self:
+        """Require a canonical or legacy dependency-lock digest."""
+        if self.dependency_lock_sha256 is None and self.timesfm_lock_sha256 is None:
+            raise ValueError("foundation dependency lock digest is required")
+        if (
+            self.dependency_lock_sha256 is not None
+            and self.timesfm_lock_sha256 is not None
+            and self.dependency_lock_sha256 != self.timesfm_lock_sha256
+        ):
+            raise ValueError("foundation dependency lock digests do not match")
+        return self
 
 
 class FoundationRuntime(StrictArtifactModel):
@@ -312,6 +357,11 @@ class FoundationRuntime(StrictArtifactModel):
     timesfm: str = Field(min_length=1)
     device: Literal["cpu"]
     checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpoint_config_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    dependency_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     timesfm_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -342,10 +392,11 @@ class FoundationResponse(APIModel):
     model_name: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
     model_revision: str = Field(min_length=1)
+    weights_license: str = Field(min_length=1)
     context_length: int = Field(ge=1)
     horizon: int = Field(ge=1)
     holdout_folds: int = Field(ge=1)
-    model_parameters: dict[str, bool | int]
+    model_parameters: dict[str, bool | int | float | str]
     timing: FoundationTiming
     metrics: FoundationMetrics
     environment: FoundationRuntime

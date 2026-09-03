@@ -1,4 +1,4 @@
-.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic timesfm timesfm-lock performance dashboard api docker-build full clean
+.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic timesfm timesfm-lock timesfm3 timesfm3-lock performance dashboard api docker-build full clean
 
 install:
 	uv sync --all-extras
@@ -57,6 +57,24 @@ timesfm-lock:
 		--generate-hashes \
 		--output-file scripts/timesfm-requirements.txt \
 		--custom-compile-command 'make timesfm-lock'
+
+timesfm3:
+	@test "$$(uname -s)-$$(uname -m)" = "Darwin-arm64" || \
+		{ printf '%s\n' 'TimesFM 3 lock supports Apple silicon only.' >&2; exit 1; }
+	CUDA_VISIBLE_DEVICES="" uv run --isolated --locked --python 3.12.12 \
+		--with-requirements scripts/timesfm3-requirements.txt \
+		scripts/run_timesfm3.py
+
+timesfm3-lock:
+	@test "$$(uname -s)-$$(uname -m)" = "Darwin-arm64" || \
+		{ printf '%s\n' 'TimesFM 3 lock supports Apple silicon only.' >&2; exit 1; }
+	MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile \
+		scripts/timesfm3-requirements.in \
+		--python 3.12.12 \
+		--python-platform aarch64-apple-darwin \
+		--generate-hashes \
+		--output-file scripts/timesfm3-requirements.txt \
+		--custom-compile-command 'make timesfm3-lock'
 
 performance:
 	uv run gridcast performance

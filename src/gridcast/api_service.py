@@ -26,11 +26,18 @@ from gridcast.api_models import (
 )
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, benchmark_week, display_model
+from gridcast.foundation_models import (
+    TIMESFM_2P5,
+    TIMESFM_3,
+    FoundationModelIdentity,
+    validate_foundation_identity,
+)
 from gridcast.performance import load_performance_summary
 
 POINT_DECISIONS_PATH = Path("artifacts/benchmark/decision_costs.csv")
 QUANTILE_DECISIONS_PATH = Path("artifacts/probabilistic/decision_costs.csv")
 FOUNDATION_SUMMARY_PATH = Path("artifacts/foundation/timesfm-2.5-200m/summary.json")
+FOUNDATION3_SUMMARY_PATH = Path("artifacts/foundation/timesfm-3.0/summary.json")
 
 
 class ForecastNotFoundError(LookupError):
@@ -328,26 +335,73 @@ class GridCastService:
 
     async def foundation(self) -> FoundationResponse:
         """Return optional zero-shot time-series foundation-model results."""
-        if not FOUNDATION_SUMMARY_PATH.exists():
+        return self._foundation_response(
+            FOUNDATION_SUMMARY_PATH, "make timesfm", TIMESFM_2P5
+        )
+
+    async def foundation3(self) -> FoundationResponse:
+        """Return optional non-commercial TimesFM 3 benchmark results."""
+        return self._foundation_response(
+            FOUNDATION3_SUMMARY_PATH, "make timesfm3", TIMESFM_3
+        )
+
+    def _foundation_response(
+        self,
+        summary_path: Path,
+        command: str,
+        expected: FoundationModelIdentity,
+    ) -> FoundationResponse:
+        if not summary_path.exists():
             raise ForecastNotFoundError(
-                "foundation artifacts not found; run `make timesfm`"
+                f"foundation artifacts not found; run `{command}`"
             )
         try:
-            summary = FoundationSummary.model_validate(
-                self._read_json(FOUNDATION_SUMMARY_PATH)
+            summary = FoundationSummary.model_validate(self._read_json(summary_path))
+            validate_foundation_identity(summary.config, expected)
+            if summary.environment.timesfm != expected.package_version:
+                raise ValueError("foundation package version does not match endpoint")
+            if (
+                expected.checkpoint_sha256 is not None
+                and summary.environment.checkpoint_sha256 != expected.checkpoint_sha256
+            ):
+                raise ValueError("foundation checkpoint digest does not match endpoint")
+            if (
+                expected.config_sha256 is not None
+                and summary.environment.checkpoint_config_sha256
+                != expected.config_sha256
+            ):
+                raise ValueError(
+                    "foundation configuration digest does not match endpoint"
+                )
+            dependency_lock = (
+                summary.environment.dependency_lock_sha256
+                or summary.environment.timesfm_lock_sha256
             )
+            if dependency_lock is None:
+                raise ValueError("foundation dependency lock digest is required")
             return FoundationResponse(
                 model_name=summary.config.model_name,
                 model_id=summary.config.model_id,
                 model_revision=summary.config.model_revision,
+                weights_license=summary.config.weights_license,
                 context_length=summary.config.context_length,
                 horizon=summary.config.horizon,
                 holdout_folds=summary.config.holdout_folds,
                 model_parameters=summary.config.model_parameters,
                 timing=summary.timing,
                 metrics=summary.metrics,
-                environment=FoundationRuntime.model_validate(
-                    summary.environment.model_dump(exclude={"installed_packages"})
+                environment=FoundationRuntime(
+                    python=summary.environment.python,
+                    platform=summary.environment.platform,
+                    torch=summary.environment.torch,
+                    timesfm=summary.environment.timesfm,
+                    device=summary.environment.device,
+                    checkpoint_sha256=summary.environment.checkpoint_sha256,
+                    checkpoint_config_sha256=(
+                        summary.environment.checkpoint_config_sha256
+                    ),
+                    dependency_lock_sha256=dependency_lock,
+                    timesfm_lock_sha256=dependency_lock,
                 ),
             )
         except (OSError, ValueError) as error:
