@@ -16,6 +16,12 @@ from gridcast.contracts import ForecastContract
 from gridcast.data import generate_synthetic_load
 from gridcast.eda import create_eda_report
 from gridcast.entsoe import ITALY_BIDDING_ZONE, ingest_entsoe_actual_load
+from gridcast.model_comparison import (
+    ComparisonConfig,
+    load_comparison_inputs,
+    run_model_comparison,
+    write_comparison_artifacts,
+)
 from gridcast.performance import (
     PerformanceConfig,
     run_performance_benchmark,
@@ -145,6 +151,32 @@ def build_parser() -> argparse.ArgumentParser:
     probabilistic.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
     probabilistic.add_argument("--n-estimators", type=int, default=300)
     probabilistic.add_argument("--rolling-window-folds", type=int, default=12)
+    comparison = subparsers.add_parser(
+        "comparison", help="compare paired weekly MAE with block bootstrap"
+    )
+    comparison.add_argument(
+        "--benchmark",
+        type=Path,
+        default=Path("artifacts/benchmark/forecasts.parquet"),
+    )
+    comparison.add_argument(
+        "--timesfm25",
+        type=Path,
+        default=Path("artifacts/foundation/timesfm-2.5-200m/forecasts.parquet"),
+    )
+    comparison.add_argument(
+        "--timesfm3",
+        type=Path,
+        default=Path("artifacts/foundation/timesfm-3.0/forecasts.parquet"),
+    )
+    comparison.add_argument(
+        "--output-dir", type=Path, default=Path("artifacts/model-comparison")
+    )
+    comparison.add_argument("--bootstrap-replicates", type=int, default=100_000)
+    comparison.add_argument("--block-length-folds", type=int, default=4)
+    comparison.add_argument("--seed", type=int, default=20_260_903)
+    comparison.add_argument("--expected-folds", type=int, default=52)
+    comparison.add_argument("--observations-per-fold", type=int, default=168)
     performance = subparsers.add_parser(
         "performance", help="benchmark local fit and inference performance"
     )
@@ -369,6 +401,47 @@ def main(argv: Sequence[str] | None = None) -> int:
             holdout_metrics["calibrated_coverage"],
             holdout_metrics["hourly_calibrated_coverage"],
             holdout_metrics["rolling_calibrated_coverage"],
+        )
+    elif args.command == "comparison":
+        comparison_config = ComparisonConfig(
+            bootstrap_replicates=args.bootstrap_replicates,
+            block_length_folds=args.block_length_folds,
+            seed=args.seed,
+            sensitivity_block_lengths=tuple(
+                sorted(
+                    {
+                        min(2, args.expected_folds),
+                        args.block_length_folds,
+                        min(6, args.expected_folds),
+                        min(8, args.expected_folds),
+                        min(13, args.expected_folds),
+                        min(26, args.expected_folds),
+                    }
+                )
+            ),
+            expected_folds=args.expected_folds,
+            observations_per_fold=args.observations_per_fold,
+        )
+        forecasts = load_comparison_inputs(
+            args.benchmark,
+            args.timesfm25,
+            args.timesfm3,
+        )
+        comparison_result = run_model_comparison(forecasts, comparison_config)
+        write_comparison_artifacts(
+            comparison_result,
+            comparison_config,
+            args.output_dir,
+            {
+                "benchmark": args.benchmark,
+                "timesfm_2_5": args.timesfm25,
+                "timesfm_3": args.timesfm3,
+            },
+        )
+        LOGGER.info(
+            "Wrote %d paired model comparisons to %s",
+            len(comparison_result.comparisons),
+            args.output_dir.resolve(),
         )
     elif args.command == "performance":
         import pandas as pd

@@ -87,8 +87,13 @@ before operational interpretation.
 TimesFM 3.0 reduces observed aggregate MAE by 8.47% relative to TimesFM 2.5 and
 wins 32 of 52 paired weekly folds. Its raw P10-P90 interval reaches 80.11%
 coverage with a mean width of 5,261.22 MW. Dependence-aware uncertainty for the
-version-to-version difference is not yet reported, and the non-commercial
-license prevents production use.
+version-to-version difference crosses zero: the marginal 95% interval is
+[-226.76, 567.98] MW and the Bonferroni-adjusted interval is
+[-357.03, 708.19] MW. The
+observed version improvement is therefore uncertain, and the non-commercial
+license prevents production use. TimesFM 2.5's 974.69 MW improvement over
+LightGBM has an adjusted interval of [317.80, 1,848.05] MW. See
+[MODEL_COMPARISON.md](MODEL_COMPARISON.md).
 
 The generated summary reports the complete first call, including any lazy PyTorch
 compilation, separately from a repeated warm 52-fold inference. Model loading and

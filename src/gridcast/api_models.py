@@ -1,9 +1,11 @@
 from datetime import datetime
 from typing import Literal, Self
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from gridcast.foundation_models import TIMESFM_2P5
+from gridcast.model_comparison import COMPARISONS
 
 
 class APIModel(BaseModel):
@@ -255,6 +257,217 @@ class DecisionResponse(APIModel):
 
     point_models: list[PointDecisionResult]
     quantile_schedules: list[QuantileDecisionResult]
+
+
+class StatisticalComparison(StrictArtifactModel):
+    """One dependence-aware paired weekly MAE comparison."""
+
+    comparison_order: int = Field(ge=1)
+    comparison_id: str = Field(min_length=1)
+    candidate_model: str = Field(min_length=1)
+    reference_model: str = Field(min_length=1)
+    folds: int = Field(ge=1)
+    observations_per_fold: int = Field(ge=1)
+    candidate_mae_mw: float = Field(gt=0.0)
+    reference_mae_mw: float = Field(gt=0.0)
+    mean_mae_improvement_mw: float
+    relative_improvement_pct: float
+    wins: int = Field(ge=0)
+    ties: int = Field(ge=0)
+    losses: int = Field(ge=0)
+    weekly_win_rate: float = Field(ge=0.0, le=1.0)
+    bootstrap_method: Literal["circular"]
+    block_length_folds: int = Field(ge=1)
+    bootstrap_replicates: int = Field(ge=1)
+    bootstrap_seed: int
+    confidence_level: float = Field(gt=0.0, lt=1.0)
+    ci_low_mw: float
+    ci_high_mw: float
+    relative_ci_low_pct: float
+    relative_ci_high_pct: float
+    weekly_win_rate_ci_low: float = Field(ge=0.0, le=1.0)
+    weekly_win_rate_ci_high: float = Field(ge=0.0, le=1.0)
+    bootstrap_directional_support: float = Field(ge=0.0, le=1.0)
+    first_half_improvement_mw: float
+    second_half_improvement_mw: float
+    adjusted_ci_low_mw: float
+    adjusted_ci_high_mw: float
+    adjusted_relative_ci_low_pct: float
+    adjusted_relative_ci_high_pct: float
+    simultaneous_superiority_supported: bool
+    family_size: int = Field(ge=1)
+    multiplicity_method: Literal["Bonferroni"]
+    familywise_confidence_level: float = Field(gt=0.0, lt=1.0)
+    adjusted_per_comparison_confidence_level: float = Field(gt=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def validate_comparison(self) -> Self:
+        """Validate paired counts, intervals, orientation, and support flag."""
+        if self.candidate_model == self.reference_model:
+            raise ValueError("comparison models must be distinct")
+        if self.wins + self.ties + self.losses != self.folds:
+            raise ValueError("weekly outcomes must sum to fold count")
+        if self.ci_low_mw > self.ci_high_mw:
+            raise ValueError("marginal confidence interval is reversed")
+        if self.relative_ci_low_pct > self.relative_ci_high_pct:
+            raise ValueError("relative confidence interval is reversed")
+        if self.weekly_win_rate_ci_low > self.weekly_win_rate_ci_high:
+            raise ValueError("weekly win-rate confidence interval is reversed")
+        if self.adjusted_ci_low_mw > self.adjusted_ci_high_mw:
+            raise ValueError("adjusted confidence interval is reversed")
+        if self.adjusted_relative_ci_low_pct > self.adjusted_relative_ci_high_pct:
+            raise ValueError("adjusted relative confidence interval is reversed")
+        if (
+            self.adjusted_ci_low_mw > self.ci_low_mw
+            or self.adjusted_ci_high_mw < self.ci_high_mw
+            or self.adjusted_relative_ci_low_pct > self.relative_ci_low_pct
+            or self.adjusted_relative_ci_high_pct < self.relative_ci_high_pct
+        ):
+            raise ValueError("adjusted intervals must contain marginal intervals")
+        if self.simultaneous_superiority_supported != (self.adjusted_ci_low_mw > 0.0):
+            raise ValueError("simultaneous support flag does not match interval")
+        if not np.isclose(
+            self.mean_mae_improvement_mw,
+            self.reference_mae_mw - self.candidate_mae_mw,
+        ):
+            raise ValueError("absolute MAE improvement is inconsistent")
+        expected_relative = 100.0 * self.mean_mae_improvement_mw / self.reference_mae_mw
+        if not np.isclose(self.relative_improvement_pct, expected_relative):
+            raise ValueError("relative MAE improvement is inconsistent")
+        expected_win_rate = (self.wins + 0.5 * self.ties) / self.folds
+        if not np.isclose(self.weekly_win_rate, expected_win_rate):
+            raise ValueError("weekly win rate is inconsistent")
+        first_folds = self.folds // 2
+        second_folds = self.folds - first_folds
+        recombined = (
+            self.first_half_improvement_mw * first_folds
+            + self.second_half_improvement_mw * second_folds
+        ) / self.folds
+        if not np.isclose(self.mean_mae_improvement_mw, recombined):
+            raise ValueError("subperiod effects do not recombine to the full effect")
+        return self
+
+
+class StatisticalComparisonConfig(StrictArtifactModel):
+    """Fixed paired block-bootstrap configuration."""
+
+    bootstrap_replicates: int = Field(ge=1)
+    block_length_folds: int = Field(ge=1)
+    seed: int
+    confidence_level: float = Field(gt=0.0, lt=1.0)
+    sensitivity_block_lengths: list[int] = Field(min_length=1)
+    expected_folds: int = Field(ge=1)
+    observations_per_fold: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_blocks(self) -> Self:
+        """Validate block lengths against the paired sample size."""
+        if self.block_length_folds > self.expected_folds:
+            raise ValueError("primary block length cannot exceed fold count")
+        if max(self.sensitivity_block_lengths) > self.expected_folds:
+            raise ValueError("sensitivity block length cannot exceed fold count")
+        if self.block_length_folds not in self.sensitivity_block_lengths:
+            raise ValueError("primary block length must be included in sensitivity")
+        if len(set(self.sensitivity_block_lengths)) != len(
+            self.sensitivity_block_lengths
+        ):
+            raise ValueError("sensitivity block lengths must be unique")
+        if self.seed < 0:
+            raise ValueError("seed must be non-negative")
+        return self
+
+
+class StatisticalComparisonSummary(StrictArtifactModel):
+    """Validated model-comparison summary artifact."""
+
+    schema_version: Literal[1]
+    config: StatisticalComparisonConfig
+    orientation: str = Field(min_length=1)
+    bootstrap_method: Literal["paired circular block bootstrap"]
+    rng: Literal["numpy.random.PCG64"]
+    quantile_method: Literal["linear"]
+    family_size: int = Field(ge=1)
+    multiplicity_method: Literal["Bonferroni"]
+    familywise_confidence_level: float = Field(gt=0.0, lt=1.0)
+    adjusted_per_comparison_confidence_level: float = Field(gt=0.0, lt=1.0)
+    resample_indices_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_artifacts: dict[str, dict[str, object]]
+    provenance_warnings: list[str]
+    comparisons: list[StatisticalComparison] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_family(self) -> Self:
+        """Validate family dimensions and the shared specified protocol."""
+        expected_family = [
+            (comparison_id, candidate, reference)
+            for comparison_id, candidate, reference in COMPARISONS
+        ]
+        actual_family = [
+            (item.comparison_id, item.candidate_model, item.reference_model)
+            for item in self.comparisons
+        ]
+        if self.family_size != len(self.comparisons):
+            raise ValueError("comparison family size does not match rows")
+        if actual_family != expected_family:
+            raise ValueError("comparison family does not match specified protocol")
+        if [item.comparison_order for item in self.comparisons] != list(
+            range(1, self.family_size + 1)
+        ):
+            raise ValueError("comparison order does not match specified protocol")
+        if any(item.family_size != self.family_size for item in self.comparisons):
+            raise ValueError("comparison row family sizes do not match")
+        if any(item.folds != self.config.expected_folds for item in self.comparisons):
+            raise ValueError("comparison fold count does not match config")
+        expected_adjusted = (
+            1.0 - (1.0 - self.config.confidence_level) / self.family_size
+        )
+        if not np.isclose(
+            self.familywise_confidence_level, self.config.confidence_level
+        ) or not np.isclose(
+            self.adjusted_per_comparison_confidence_level, expected_adjusted
+        ):
+            raise ValueError("comparison confidence levels are inconsistent")
+        for item in self.comparisons:
+            if (
+                item.observations_per_fold != self.config.observations_per_fold
+                or item.bootstrap_replicates != self.config.bootstrap_replicates
+                or item.block_length_folds != self.config.block_length_folds
+                or item.bootstrap_seed != self.config.seed
+                or not np.isclose(item.confidence_level, self.config.confidence_level)
+                or not np.isclose(
+                    item.familywise_confidence_level,
+                    self.familywise_confidence_level,
+                )
+                or not np.isclose(
+                    item.adjusted_per_comparison_confidence_level,
+                    self.adjusted_per_comparison_confidence_level,
+                )
+            ):
+                raise ValueError("comparison row protocol does not match config")
+        model_mae: dict[str, float] = {}
+        for item in self.comparisons:
+            for model, mae in (
+                (item.candidate_model, item.candidate_mae_mw),
+                (item.reference_model, item.reference_mae_mw),
+            ):
+                if model in model_mae and not np.isclose(model_mae[model], mae):
+                    raise ValueError("model MAE is inconsistent across comparisons")
+                model_mae[model] = mae
+        return self
+
+
+class StatisticalComparisonResponse(APIModel):
+    """Public paired model-comparison protocol and results."""
+
+    orientation: str
+    bootstrap_method: str
+    bootstrap_replicates: int
+    block_length_folds: int
+    confidence_level: float
+    familywise_confidence_level: float
+    adjusted_per_comparison_confidence_level: float
+    provenance_warnings: list[str]
+    comparisons: list[StatisticalComparison]
 
 
 class FoundationMetrics(StrictArtifactModel):

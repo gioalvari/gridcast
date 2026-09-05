@@ -23,6 +23,8 @@ from gridcast.api_models import (
     ProbabilisticForecastResponse,
     ProbabilisticMetadata,
     QuantileDecisionResult,
+    StatisticalComparisonResponse,
+    StatisticalComparisonSummary,
 )
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, benchmark_week, display_model
@@ -38,6 +40,7 @@ POINT_DECISIONS_PATH = Path("artifacts/benchmark/decision_costs.csv")
 QUANTILE_DECISIONS_PATH = Path("artifacts/probabilistic/decision_costs.csv")
 FOUNDATION_SUMMARY_PATH = Path("artifacts/foundation/timesfm-2.5-200m/summary.json")
 FOUNDATION3_SUMMARY_PATH = Path("artifacts/foundation/timesfm-3.0/summary.json")
+COMPARISON_SUMMARY_PATH = Path("artifacts/model-comparison/summary.json")
 
 
 class ForecastNotFoundError(LookupError):
@@ -332,6 +335,34 @@ class GridCastService:
                 for row in quantile_data.to_dict(orient="records")
             ],
         )
+
+    async def comparisons(self) -> StatisticalComparisonResponse:
+        """Return optional dependence-aware paired model comparisons."""
+        if not COMPARISON_SUMMARY_PATH.exists():
+            raise ForecastNotFoundError(
+                "comparison artifacts not found; run `make comparison`"
+            )
+        try:
+            summary = StatisticalComparisonSummary.model_validate(
+                self._read_json(COMPARISON_SUMMARY_PATH)
+            )
+            return StatisticalComparisonResponse(
+                orientation=summary.orientation,
+                bootstrap_method=summary.bootstrap_method,
+                bootstrap_replicates=summary.config.bootstrap_replicates,
+                block_length_folds=summary.config.block_length_folds,
+                confidence_level=summary.config.confidence_level,
+                familywise_confidence_level=summary.familywise_confidence_level,
+                adjusted_per_comparison_confidence_level=(
+                    summary.adjusted_per_comparison_confidence_level
+                ),
+                provenance_warnings=summary.provenance_warnings,
+                comparisons=summary.comparisons,
+            )
+        except (OSError, ValueError) as error:
+            raise InvalidArtifactError(
+                f"invalid comparison artifact: {error}"
+            ) from error
 
     async def foundation(self) -> FoundationResponse:
         """Return optional zero-shot time-series foundation-model results."""

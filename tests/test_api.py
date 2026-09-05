@@ -10,6 +10,7 @@ from gridcast.api_service import GridCastService
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, MissingArtifactsError
 from gridcast.foundation_models import TIMESFM_2P5, TIMESFM_3
+from gridcast.model_comparison import COMPARISONS
 
 
 def _service() -> GridCastService:
@@ -337,6 +338,155 @@ async def test_decisions_endpoint_returns_optional_results(
 
     assert response.status_code == 200
     assert response.json()["point_models"][0]["model"] == "lightgbm"
+
+
+def _comparison_summary() -> dict[str, object]:
+    model_mae = {
+        "seasonal_naive_24h": 3000.0,
+        "lightgbm_exogenous": 2900.0,
+        TIMESFM_2P5.model_name: 1900.0,
+        TIMESFM_3.model_name: 1750.0,
+    }
+    family_size = len(COMPARISONS)
+    adjusted_level = 1.0 - 0.05 / family_size
+    comparisons: list[dict[str, object]] = []
+    for order, (comparison_id, candidate, reference) in enumerate(COMPARISONS, 1):
+        improvement = model_mae[reference] - model_mae[candidate]
+        comparisons.append(
+            {
+                "comparison_order": order,
+                "comparison_id": comparison_id,
+                "candidate_model": candidate,
+                "reference_model": reference,
+                "folds": 52,
+                "observations_per_fold": 168,
+                "candidate_mae_mw": model_mae[candidate],
+                "reference_mae_mw": model_mae[reference],
+                "mean_mae_improvement_mw": improvement,
+                "relative_improvement_pct": (
+                    100.0 * improvement / model_mae[reference]
+                ),
+                "wins": 31,
+                "ties": 0,
+                "losses": 21,
+                "weekly_win_rate": 31 / 52,
+                "bootstrap_method": "circular",
+                "block_length_folds": 4,
+                "bootstrap_replicates": 100_000,
+                "bootstrap_seed": 20_260_903,
+                "confidence_level": 0.95,
+                "ci_low_mw": improvement - 100.0,
+                "ci_high_mw": improvement + 100.0,
+                "relative_ci_low_pct": -1.0,
+                "relative_ci_high_pct": 1.0,
+                "weekly_win_rate_ci_low": 0.48,
+                "weekly_win_rate_ci_high": 0.71,
+                "bootstrap_directional_support": 0.652,
+                "first_half_improvement_mw": improvement - 10.0,
+                "second_half_improvement_mw": improvement + 10.0,
+                "adjusted_ci_low_mw": improvement - 200.0,
+                "adjusted_ci_high_mw": improvement + 200.0,
+                "adjusted_relative_ci_low_pct": -2.0,
+                "adjusted_relative_ci_high_pct": 2.0,
+                "simultaneous_superiority_supported": improvement > 200.0,
+                "family_size": family_size,
+                "multiplicity_method": "Bonferroni",
+                "familywise_confidence_level": 0.95,
+                "adjusted_per_comparison_confidence_level": adjusted_level,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "config": {
+            "bootstrap_replicates": 100_000,
+            "block_length_folds": 4,
+            "seed": 20_260_903,
+            "confidence_level": 0.95,
+            "sensitivity_block_lengths": [2, 4, 6, 8, 13, 26],
+            "expected_folds": 52,
+            "observations_per_fold": 168,
+        },
+        "orientation": "positive favors candidate",
+        "bootstrap_method": "paired circular block bootstrap",
+        "rng": "numpy.random.PCG64",
+        "quantile_method": "linear",
+        "family_size": family_size,
+        "multiplicity_method": "Bonferroni",
+        "familywise_confidence_level": 0.95,
+        "adjusted_per_comparison_confidence_level": adjusted_level,
+        "resample_indices_sha256": "a" * 64,
+        "source_artifacts": {},
+        "provenance_warnings": ["legacy upstream manifest"],
+        "comparisons": comparisons,
+    }
+
+
+@pytest.mark.anyio
+async def test_comparisons_endpoint_returns_paired_uncertainty(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(json.dumps(_comparison_summary()), encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.COMPARISON_SUMMARY_PATH", summary_path)
+
+    response = await client.get("/api/v1/comparisons")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["bootstrap_replicates"] == 100_000
+    assert payload["comparisons"][0]["mean_mae_improvement_mw"] == 100.0
+    assert payload["familywise_confidence_level"] == 0.95
+    assert payload["provenance_warnings"] == ["legacy upstream manifest"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("contents", [None, "not JSON", "{}"])
+async def test_comparisons_endpoint_handles_missing_or_invalid_artifact(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: str | None,
+) -> None:
+    summary_path = tmp_path / "summary.json"
+    if contents is not None:
+        summary_path.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.COMPARISON_SUMMARY_PATH", summary_path)
+
+    response = await client.get("/api/v1/comparisons")
+
+    assert response.status_code == (404 if contents is None else 503)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid", ["cross_row_mae", "adjusted_interval"])
+async def test_comparisons_endpoint_rejects_inconsistent_family(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: str,
+) -> None:
+    summary = _comparison_summary()
+    comparisons = summary["comparisons"]
+    assert isinstance(comparisons, list)
+    first = comparisons[0]
+    assert isinstance(first, dict)
+    if invalid == "cross_row_mae":
+        second = comparisons[1]
+        assert isinstance(second, dict)
+        second["reference_mae_mw"] = 3001.0
+        second["mean_mae_improvement_mw"] = 1101.0
+        second["relative_improvement_pct"] = 100.0 * 1101.0 / 3001.0
+    else:
+        first["adjusted_ci_low_mw"] = first["ci_low_mw"] + 1.0
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.COMPARISON_SUMMARY_PATH", summary_path)
+
+    response = await client.get("/api/v1/comparisons")
+
+    assert response.status_code == 503
 
 
 @pytest.mark.anyio

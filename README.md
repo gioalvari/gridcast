@@ -17,7 +17,9 @@ models: **19.07%** below the weekly
 seasonal-naive baseline, **3.07%** below the stronger daily seasonal-naive
 baseline, and **2.38%** below base LightGBM. The daily baseline wins the most
 individual weeks, and uncertainty around these small paired differences is not
-yet reported, so this is not a claim of reliable model superiority.
+resolved by the paired four-week block bootstrap: the 95% interval for the MAE
+improvement is **-431.87 to 562.71 MW**. This is not evidence of reliable model
+superiority; its Bonferroni-adjusted interval is **-633.18 to 713.83 MW**.
 
 An optional Apache-2.0 **TimesFM 2.5 200M zero-shot** benchmark reaches
 **1,926.88 MW MAE**, 33.59% below combined LightGBM without task-specific PJME
@@ -31,6 +33,11 @@ are excluded from production-oriented claims and defaults.
 On the same historical holdout, it reaches **1,763.63 MW MAE** and **80.11%** raw
 P10-P90 coverage, but the repeatedly inspected period and possible pretraining
 overlap prevent an untouched generalization claim.
+Its observed `163.25 MW` improvement over TimesFM 2.5 is also uncertain after
+weekly dependence is respected: the 95% interval is **-226.76 to 567.98 MW**.
+Its adjusted interval is **-357.03 to 708.19 MW**. See
+[MODEL_COMPARISON.md](MODEL_COMPARISON.md) for the specified six-pair family and
+multiplicity-adjusted results.
 
 ## Why this project
 
@@ -48,6 +55,7 @@ Requirements: Python 3.11+ and
 make install
 make full
 make demo
+make comparison  # after benchmark and both optional TimesFM runs
 ```
 
 The demo writes the following reproducible artifacts to `artifacts/demo/`:
@@ -216,6 +224,7 @@ The Streamlit dashboard opens at `http://localhost:8501` and provides:
 - an interactive weekly comparison of actuals and point forecasts;
 - calibrated probabilistic intervals and coverage diagnostics;
 - the optional TimesFM zero-shot benchmark and runtime metadata;
+- dependence-aware paired effects and confidence intervals;
 - optional local fit, latency, size, and memory measurements;
 - a concise explanation of the anti-leakage evaluation contract.
 
@@ -244,7 +253,8 @@ make api
 OpenAPI documentation is available at `http://localhost:8000/docs`. The API
 exposes health, metadata, leaderboard, point-forecast, calibrated probabilistic
 forecast, decision-sensitivity, foundation-model, and optional local-performance
-endpoints. It returns `503` with setup instructions when core artifacts are
+endpoints, plus optional statistical comparisons at `/api/v1/comparisons`. It
+returns `503` with setup instructions when core artifacts are
 unavailable and `404` if optional results have not been generated.
 The `/health` endpoint reports process liveness, while `/ready` returns success
 only after the required core artifact bundle loads and validates.
@@ -266,6 +276,7 @@ docker run --rm -p 8000:8000 \
 - **Baselines:** persistence, previous day, and previous week
 - **Validation:** expanding training window with non-overlapping weekly folds
 - **Metrics:** MAE, RMSE, and MASE
+- **Paired uncertainty:** four-week circular block bootstrap over weekly MAE
 - **Data:** public PJME hourly load and Philadelphia ERA5 temperature; synthetic
   demand is retained only for the offline demo and tests
 

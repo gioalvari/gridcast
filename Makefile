@@ -1,4 +1,4 @@
-.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic timesfm timesfm-lock timesfm3 timesfm3-lock performance dashboard api docker-build full clean
+.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic comparison timesfm timesfm-lock timesfm3 timesfm3-lock performance dashboard api docker-build full clean
 
 install:
 	uv sync --all-extras
@@ -39,6 +39,9 @@ benchmark:
 
 probabilistic:
 	uv run gridcast probabilistic
+
+comparison:
+	uv run gridcast comparison
 
 timesfm:
 	@test "$$(uname -s)-$$(uname -m)" = "Darwin-arm64" || \
