@@ -17,6 +17,7 @@ from gridcast.api_models import (
     PerformanceResponse,
     PointForecastResponse,
     ProbabilisticForecastResponse,
+    StatisticalComparisonResponse,
 )
 from gridcast.api_service import (
     ForecastNotFoundError,
@@ -58,7 +59,7 @@ app = FastAPI(
     title="GridCast API",
     description=(
         "Read-only PJME point, probabilistic, decision, performance, and "
-        "foundation-model artifacts."
+        "foundation-model and statistical-comparison artifacts."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -189,6 +190,18 @@ async def decisions(
 ) -> DecisionResponse:
     """Return optional synthetic decision-cost sensitivity results."""
     return await service.decisions()
+
+
+@app.get(
+    "/api/v1/comparisons",
+    response_model=StatisticalComparisonResponse,
+    tags=["evaluation"],
+)
+async def comparisons(
+    service: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> StatisticalComparisonResponse:
+    """Return dependence-aware paired weekly model comparisons."""
+    return await service.comparisons()
 
 
 @app.get(

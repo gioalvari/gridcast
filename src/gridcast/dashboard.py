@@ -1,11 +1,12 @@
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from gridcast.api_models import FoundationSummary
+from gridcast.api_models import FoundationSummary, StatisticalComparisonSummary
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import (
     DashboardData,
@@ -494,6 +495,119 @@ def _render_performance() -> None:
     )
 
 
+def _render_evidence() -> None:
+    st.markdown("## Dependence-aware evidence")
+    st.caption(
+        "Paired weekly MAE differences with a circular block bootstrap. Positive "
+        "values favor the candidate model."
+    )
+    path = Path("artifacts/model-comparison/summary.json")
+    if not path.exists():
+        st.info("Run `make comparison` to generate paired uncertainty estimates.")
+        return
+    try:
+        summary = StatisticalComparisonSummary.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as error:
+        st.info(f"The statistical comparison summary is invalid: {error}")
+        return
+    rows = pd.DataFrame([item.model_dump() for item in summary.comparisons])
+    rows["Candidate"] = rows["candidate_model"].map(display_model)
+    rows["Reference"] = rows["reference_model"].map(display_model)
+    rows["Comparison"] = rows["Candidate"] + " vs " + rows["Reference"]
+    candidate_supported = rows["adjusted_ci_low_mw"].gt(0.0)
+    reference_supported = rows["adjusted_ci_high_mw"].lt(0.0)
+    chart = go.Figure()
+    chart.add_trace(
+        go.Scatter(
+            x=rows["mean_mae_improvement_mw"],
+            y=rows["Comparison"],
+            mode="markers",
+            marker=dict(
+                size=13,
+                color=np.select(
+                    [candidate_supported, reference_supported],
+                    [ORANGE, CYAN],
+                    default=MUTED,
+                ),
+                line=dict(color=INK, width=1),
+            ),
+            error_x=dict(
+                type="data",
+                symmetric=False,
+                array=(rows["adjusted_ci_high_mw"] - rows["mean_mae_improvement_mw"]),
+                arrayminus=(
+                    rows["mean_mae_improvement_mw"] - rows["adjusted_ci_low_mw"]
+                ),
+                color=INK,
+                thickness=2,
+            ),
+            hovertemplate=(
+                "%{y}<br>Improvement: %{x:,.0f} MW<br>Adjusted CI: "
+                "%{customdata[0]:,.0f} to %{customdata[1]:,.0f} MW<extra></extra>"
+            ),
+            customdata=rows[["adjusted_ci_low_mw", "adjusted_ci_high_mw"]].to_numpy(),
+        )
+    )
+    chart.add_vline(x=0.0, line_dash="dash", line_color=ORANGE)
+    chart.update_layout(
+        title="Weekly MAE improvement with Bonferroni-adjusted intervals",
+        showlegend=False,
+    )
+    chart.update_xaxes(title="Reference MAE − candidate MAE (MW)")
+    chart.update_yaxes(autorange="reversed")
+    st.plotly_chart(
+        _chart_layout(chart, 470),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    display = rows.copy()
+    display["Effect (MW)"] = rows["mean_mae_improvement_mw"].round(1)
+    display["Adjusted CI"] = rows.apply(
+        lambda row: (
+            f"[{row['adjusted_ci_low_mw']:,.0f}, {row['adjusted_ci_high_mw']:,.0f}]"
+        ),
+        axis=1,
+    )
+    display["Weekly wins"] = rows.apply(
+        lambda row: f"{row['wins']}/{row['folds']}", axis=1
+    )
+    display["Familywise evidence"] = np.where(
+        candidate_supported,
+        "Candidate supported",
+        np.where(reference_supported, "Reference supported", "Uncertain"),
+    )
+    st.dataframe(
+        display[
+            [
+                "Comparison",
+                "Effect (MW)",
+                "Adjusted CI",
+                "Weekly wins",
+                "Familywise evidence",
+            ]
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    st.caption(
+        f"{summary.config.bootstrap_replicates:,} paired resamples · "
+        f"{summary.config.block_length_folds}-week blocks · PCG64 seed "
+        f"{summary.config.seed} · {summary.family_size} specified contrasts · "
+        f"{summary.adjusted_per_comparison_confidence_level:.2%} adjusted "
+        f"intervals for {summary.familywise_confidence_level:.0%} simultaneous "
+        "family coverage."
+    )
+    st.warning(
+        "The holdout was repeatedly inspected. Intervals are conditional on this "
+        "historical sequence and do not include model-selection or pretraining "
+        "uncertainty."
+    )
+    if summary.provenance_warnings:
+        st.caption("Upstream provenance: " + "; ".join(summary.provenance_warnings))
+
+
 def _render_decisions() -> None:
     st.markdown("## Decisions, not only errors")
     st.caption(
@@ -741,6 +855,7 @@ def main() -> None:
                 "Uncertainty",
                 "Decisions",
                 "Foundation model",
+                "Evidence",
                 "Performance",
                 "Methodology",
             ],
@@ -760,6 +875,7 @@ def main() -> None:
         "Uncertainty": lambda: _render_uncertainty(data),
         "Decisions": _render_decisions,
         "Foundation model": lambda: _render_foundation(data),
+        "Evidence": _render_evidence,
         "Performance": _render_performance,
         "Methodology": _render_methodology,
     }

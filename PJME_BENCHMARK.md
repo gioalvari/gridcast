@@ -41,8 +41,11 @@ weekly naive baseline, 2.38% below base LightGBM, and 3.07% below daily naive.
 The weather-only ablation captures most of this difference. Holidays alone
 slightly worsen aggregate MAE, while combining holidays with weather is 0.39%
 lower than weather-only. Dependence-aware uncertainty for these paired
-differences is not yet reported, so the small margins do not establish reliable
-superiority.
+differences confirms that the 91.95 MW improvement over daily naive remains
+uncertain: the marginal 95% interval is [-431.87, 562.71] MW and its
+Bonferroni-adjusted interval is [-633.18, 713.83] MW within the six-comparison
+family. The small margin does not establish
+reliable superiority. See [MODEL_COMPARISON.md](MODEL_COMPARISON.md).
 
 ## Stability
 

@@ -20,6 +20,7 @@ make benchmark
 make probabilistic
 make timesfm
 make timesfm3
+make comparison
 ```
 
 Dataset files remain ignored and are not redistributed. Their deterministic
@@ -32,3 +33,8 @@ digests. TimesFM 3 also verifies and records its checkpoint configuration digest
 The manifest records the checked-out commit and worktree state. A dirty worktree
 can still produce a manifest, so publication-quality runs should use a clean
 committed revision.
+
+The model-comparison manifest additionally records hashes and upstream manifest
+metadata for every source forecast artifact, along with a digest of the primary
+block-bootstrap resampling matrix. Upstream dirty or legacy provenance remains a
+warning in the generated summary rather than being silently discarded.

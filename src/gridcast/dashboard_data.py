@@ -82,6 +82,7 @@ class DashboardData:
 
 MODEL_LABELS = {
     "timesfm_2_5_200m_zero_shot": "TimesFM 2.5 200M zero-shot",
+    "timesfm_3_0_zero_shot": "TimesFM 3.0 zero-shot",
     "lightgbm_exogenous": "LightGBM + weather + holidays",
     "lightgbm_weather": "LightGBM + weather",
     "lightgbm": "LightGBM base",
