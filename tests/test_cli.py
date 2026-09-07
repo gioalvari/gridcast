@@ -90,6 +90,66 @@ def test_benchmark_command_writes_leaderboard(tmp_path: Path) -> None:
     }
 
 
+def test_benchmark_command_forwards_extended_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_path = tmp_path / "load.parquet"
+    weather_path = tmp_path / "weather.parquet"
+    data = generate_synthetic_load(periods=24 * 400, start="2016-01-01")
+    data.to_parquet(input_path, index=False)
+    data[[Col.TIMESTAMP]].assign(**{Col.TEMPERATURE: 10.0}).to_parquet(
+        weather_path, index=False
+    )
+    captured: dict[str, object] = {}
+
+    def run(*_: object, **__: object) -> object:
+        captured["called"] = True
+        from gridcast.benchmark import BenchmarkResult
+
+        return BenchmarkResult(
+            forecasts=pd.DataFrame(
+                {
+                    Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT],
+                    Col.MODEL: ["catboost_exogenous"],
+                    Col.TIMESTAMP: [pd.Timestamp("2018-01-01")],
+                    Col.TARGET: [1.0],
+                    Col.PREDICTION: [1.0],
+                    Col.FOLD: [1],
+                    Col.CUTOFF: [pd.Timestamp("2017-12-31 23:00")],
+                }
+            ),
+            fold_metrics=pd.DataFrame(),
+            leaderboard=pd.DataFrame(
+                {
+                    Col.SPLIT: [HISTORICAL_HOLDOUT_SPLIT],
+                    Col.MODEL: ["catboost_exogenous"],
+                    "mae": [1.0],
+                    "mase": [1.0],
+                }
+            ),
+        )
+
+    monkeypatch.setattr("gridcast.cli.run_pjme_benchmark", run)
+    monkeypatch.setattr("gridcast.cli.write_benchmark_artifacts", lambda *_: None)
+
+    exit_status = main(
+        [
+            "benchmark",
+            "--input",
+            str(input_path),
+            "--weather",
+            str(weather_path),
+            "--output-dir",
+            str(tmp_path / "extended"),
+            "--extended-models",
+        ]
+    )
+
+    assert exit_status == 0
+    assert captured["called"] is True
+
+
 def test_probabilistic_command_writes_calibrated_metrics(tmp_path: Path) -> None:
     input_path = tmp_path / "load.parquet"
     weather_path = tmp_path / "weather.parquet"

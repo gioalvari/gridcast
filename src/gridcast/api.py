@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from gridcast.api_models import (
     DecisionResponse,
+    ExtendedBenchmarkResponse,
     FoundationResponse,
     HealthResponse,
     LeaderboardEntry,
@@ -133,6 +134,18 @@ async def leaderboard(
 ) -> list[LeaderboardEntry]:
     """Return point-model ranking for validation or historical holdout."""
     return await service.leaderboard(split)
+
+
+@app.get(
+    "/api/v1/benchmark/extended",
+    response_model=ExtendedBenchmarkResponse,
+    tags=["evaluation"],
+)
+async def extended_benchmark(
+    service: Annotated[GridCastService, Depends(get_gridcast_service)],
+) -> ExtendedBenchmarkResponse:
+    """Return optional CatBoost, XGBoost, histogram, and AutoML results."""
+    return await service.extended_benchmark()
 
 
 @app.get(

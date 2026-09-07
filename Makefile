@@ -1,7 +1,11 @@
-.PHONY: install check format test demo data weather entsoe day-ahead eda benchmark probabilistic comparison timesfm timesfm-lock timesfm3 timesfm3-lock performance dashboard api docker-build full clean
+.PHONY: install install-extended check format test demo data weather entsoe day-ahead eda benchmark benchmark-extended probabilistic comparison timesfm timesfm-lock timesfm3 timesfm3-lock performance dashboard api docker-build full clean
 
 install:
-	uv sync --all-extras
+	uv sync --extra dev
+	uv pip install -e .
+
+install-extended:
+	uv sync --extra dev --extra extended
 	uv pip install -e .
 
 check:
@@ -36,6 +40,11 @@ eda:
 
 benchmark:
 	uv run gridcast benchmark
+
+benchmark-extended:
+	uv run --extra extended gridcast benchmark \
+		--extended-models \
+		--output-dir artifacts/benchmark-extended
 
 probabilistic:
 	uv run gridcast probabilistic
