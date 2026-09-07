@@ -21,6 +21,7 @@ make probabilistic
 make timesfm
 make timesfm3
 make comparison
+make benchmark-extended
 ```
 
 Dataset files remain ignored and are not redistributed. Their deterministic
@@ -38,3 +39,8 @@ The model-comparison manifest additionally records hashes and upstream manifest
 metadata for every source forecast artifact, along with a digest of the primary
 block-bootstrap resampling matrix. Upstream dirty or legacy provenance remains a
 warning in the generated summary rather than being silently discarded.
+
+The extended booster summary is written after all derived tables and acts as a
+bundle index. It records SHA-256 digests for the leaderboard, validation-only
+selection, exploratory comparisons, and block-length sensitivity table, plus
+resolved backend versions and explicit parameter maps.

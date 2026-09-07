@@ -131,6 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--holdout-folds", type=int, default=52)
     benchmark.add_argument("--max-train-hours", type=int, default=24 * 365 * 5)
     benchmark.add_argument("--n-estimators", type=int, default=300)
+    benchmark.add_argument(
+        "--extended-models",
+        action="store_true",
+        help=(
+            "add CatBoost, XGBoost, histogram boosting, and validation-selected AutoML"
+        ),
+    )
     probabilistic = subparsers.add_parser(
         "probabilistic", help="run quantile and conformal PJME benchmark"
     )
@@ -343,6 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             holdout_folds=args.holdout_folds,
             max_train_hours=args.max_train_hours,
             n_estimators=args.n_estimators,
+            extended_models=args.extended_models,
         )
         weather_data = None
         if not args.without_exogenous:
@@ -364,7 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ]
         winner = holdout_leaderboard.iloc[0]
         LOGGER.info(
-            "Historical holdout winner: %s, MAE %.2f MW, MASE %.3f",
+            "Lowest observed historical-holdout MAE: %s, %.2f MW, MASE %.3f",
             winner["model"],
             winner["mae"],
             winner["mase"],

@@ -156,6 +156,99 @@ class LeaderboardEntry(APIModel):
     improvement_vs_weekly_percent: float
 
 
+class ExtendedModelComparison(StrictArtifactModel):
+    """Exploratory paired comparison against LightGBM exogenous."""
+
+    candidate_model: str = Field(min_length=1)
+    reference_model: Literal["lightgbm_exogenous"]
+    mean_mae_improvement_mw: float
+    wins: int = Field(ge=0)
+    folds: int = Field(ge=1)
+    ci_low_mw: float
+    ci_high_mw: float
+    adjusted_ci_low_mw: float
+    adjusted_ci_high_mw: float
+    simultaneous_superiority_supported: bool
+    exploratory: Literal[True]
+    block_length_folds: int = Field(ge=1)
+    bootstrap_replicates: int = Field(ge=1)
+    bootstrap_seed: int
+    family_size: int = Field(ge=1)
+    familywise_confidence_level: float = Field(gt=0.0, lt=1.0)
+    adjusted_per_comparison_confidence_level: float = Field(gt=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> Self:
+        """Validate interval ordering, containment, and support semantics."""
+        if self.ci_low_mw > self.ci_high_mw:
+            raise ValueError("extended marginal interval is reversed")
+        if self.adjusted_ci_low_mw > self.adjusted_ci_high_mw:
+            raise ValueError("extended adjusted interval is reversed")
+        if (
+            self.adjusted_ci_low_mw > self.ci_low_mw
+            or self.adjusted_ci_high_mw < self.ci_high_mw
+        ):
+            raise ValueError("extended adjusted interval must contain marginal")
+        if self.simultaneous_superiority_supported != (self.adjusted_ci_low_mw > 0.0):
+            raise ValueError("extended support flag does not match interval")
+        if self.wins > self.folds:
+            raise ValueError("extended weekly wins cannot exceed folds")
+        return self
+
+
+class ExtendedBenchmarkResponse(APIModel):
+    """Optional booster benchmark and validation-only AutoML policy."""
+
+    leaderboard: list[LeaderboardEntry]
+    selected_model: str = Field(min_length=1)
+    selection_split: Literal["validation"]
+    holdout_target_used_for_selection: Literal[False]
+    candidate_validation_mae: dict[str, float]
+    package_versions: dict[str, str]
+    comparisons: list[ExtendedModelComparison]
+    sensitivity: list[dict[str, bool | float | int | str]]
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> Self:
+        """Validate the validation-selected policy and comparison family."""
+        candidates = {
+            "lightgbm_exogenous",
+            "hist_gradient_boosting_exogenous",
+            "catboost_exogenous",
+            "xgboost_exogenous",
+        }
+        compared = {item.candidate_model for item in self.comparisons}
+        if set(self.candidate_validation_mae) != candidates:
+            raise ValueError("extended validation candidate set is incomplete")
+        if self.selected_model not in candidates:
+            raise ValueError("extended selected model is not a candidate")
+        expected = min(
+            self.candidate_validation_mae,
+            key=lambda model: (self.candidate_validation_mae[model], model),
+        )
+        if self.selected_model != expected:
+            raise ValueError("extended selected model is not validation winner")
+        if compared != candidates.difference({"lightgbm_exogenous"}):
+            raise ValueError("extended comparison family is incomplete")
+        if len(self.comparisons) != 3 or any(
+            item.family_size != 3 for item in self.comparisons
+        ):
+            raise ValueError("extended comparison family size must be three")
+        protocol = {
+            (
+                item.block_length_folds,
+                item.bootstrap_replicates,
+                item.bootstrap_seed,
+                item.familywise_confidence_level,
+                item.adjusted_per_comparison_confidence_level,
+            )
+            for item in self.comparisons
+        }
+        if len(protocol) != 1:
+            raise ValueError("extended comparison protocols do not match")
+        return self
+
+
 class PointForecast(APIModel):
     """One timestamped point forecast."""
 

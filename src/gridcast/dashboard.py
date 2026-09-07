@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from gridcast.dashboard_data import (
     load_dashboard_data,
     probabilistic_week,
 )
+from gridcast.extended_models import load_extended_benchmark_bundle
 from gridcast.foundation_models import (
     TIMESFM_2P5,
     TIMESFM_3,
@@ -37,6 +39,10 @@ MODEL_COLORS = {
     "lightgbm_weather": "#E68A3C",
     "lightgbm": "#42B7C8",
     "lightgbm_holidays": "#7D8C91",
+    "catboost_exogenous": "#8C4CCB",
+    "xgboost_exogenous": "#D99B2B",
+    "hist_gradient_boosting_exogenous": "#238B7E",
+    "automl_exogenous": "#B63A58",
     "seasonal_naive_24h": "#5969A6",
     "seasonal_naive_168h": "#9A6FB0",
     "persistence_1h": "#B5AAA0",
@@ -608,6 +614,99 @@ def _render_evidence() -> None:
         st.caption("Upstream provenance: " + "; ".join(summary.provenance_warnings))
 
 
+def _render_extended_models() -> None:
+    st.markdown("## Extended booster benchmark")
+    st.caption(
+        "Optional CatBoost, XGBoost, and histogram boosting use the same exogenous "
+        "features and chronological folds as LightGBM."
+    )
+    directory = Path("artifacts/benchmark-extended")
+    if not (directory / "summary.json").exists():
+        st.info("Run `make benchmark-extended` to generate optional booster results.")
+        return
+    try:
+        bundle = load_extended_benchmark_bundle(directory)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        st.info(f"The extended benchmark artifacts are invalid: {error}")
+        return
+    candidates = [
+        "lightgbm_exogenous",
+        "hist_gradient_boosting_exogenous",
+        "catboost_exogenous",
+        "xgboost_exogenous",
+    ]
+    holdout = bundle.leaderboard.loc[
+        bundle.leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+        & bundle.leaderboard[Col.MODEL].isin(candidates)
+    ].sort_values("mae")
+    chart = go.Figure(
+        go.Bar(
+            x=holdout["mae"],
+            y=holdout[Col.MODEL].map(display_model),
+            orientation="h",
+            marker_color=[
+                MODEL_COLORS.get(str(model), MUTED) for model in holdout[Col.MODEL]
+            ],
+            text=[f"{value:,.0f}" for value in holdout["mae"]],
+            textposition="outside",
+        )
+    )
+    chart.update_layout(title="Observed holdout MAE", showlegend=False)
+    chart.update_xaxes(title="MAE (MW)")
+    chart.update_yaxes(autorange="reversed")
+    st.plotly_chart(
+        _chart_layout(chart, 390),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    selected = str(bundle.selection.get("selected_model", ""))
+    st.metric("Validation-selected policy", display_model(selected))
+    validation_scores = bundle.selection.get("candidate_validation_mae", {})
+    if isinstance(validation_scores, dict):
+        score_table = pd.DataFrame(
+            [
+                {"Candidate": display_model(str(model)), "Validation MAE (MW)": score}
+                for model, score in validation_scores.items()
+            ]
+        )
+        st.dataframe(score_table, hide_index=True, width="stretch")
+    comparison_table = bundle.comparisons.copy()
+    comparison_table["Candidate"] = comparison_table["candidate_model"].map(
+        display_model
+    )
+    comparison_table["Improvement vs LightGBM (MW)"] = comparison_table[
+        "mean_mae_improvement_mw"
+    ].round(1)
+    comparison_table["Adjusted CI"] = comparison_table.apply(
+        lambda row: (
+            f"[{row['adjusted_ci_low_mw']:,.0f}, {row['adjusted_ci_high_mw']:,.0f}]"
+        ),
+        axis=1,
+    )
+    st.dataframe(
+        comparison_table[["Candidate", "Improvement vs LightGBM (MW)", "Adjusted CI"]],
+        hide_index=True,
+        width="stretch",
+    )
+    sensitivity = bundle.sensitivity.copy()
+    sensitivity["Candidate"] = sensitivity["candidate_model"].map(display_model)
+    sensitivity["Adjusted lower bound (MW)"] = sensitivity["adjusted_ci_low_mw"].round(
+        1
+    )
+    sensitivity_table = sensitivity.pivot(
+        index="Candidate",
+        columns="block_length_folds",
+        values="Adjusted lower bound (MW)",
+    ).reset_index()
+    st.caption("Sensitivity: adjusted lower bound by circular block length")
+    st.dataframe(sensitivity_table, hide_index=True, width="stretch")
+    st.warning(
+        "This is an exploratory extension added after inspecting the historical "
+        "holdout. AutoML selects one fixed candidate from validation only; it is "
+        "not a holdout-tuned ensemble."
+    )
+
+
 def _render_decisions() -> None:
     st.markdown("## Decisions, not only errors")
     st.caption(
@@ -856,6 +955,7 @@ def main() -> None:
                 "Decisions",
                 "Foundation model",
                 "Evidence",
+                "Extended models",
                 "Performance",
                 "Methodology",
             ],
@@ -876,6 +976,7 @@ def main() -> None:
         "Decisions": _render_decisions,
         "Foundation model": lambda: _render_foundation(data),
         "Evidence": _render_evidence,
+        "Extended models": _render_extended_models,
         "Performance": _render_performance,
         "Methodology": _render_methodology,
     }

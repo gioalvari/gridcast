@@ -9,6 +9,8 @@ from gridcast.api_models import (
     DatasetMetadata,
     DecisionResponse,
     ExperimentMetadata,
+    ExtendedBenchmarkResponse,
+    ExtendedModelComparison,
     FoundationResponse,
     FoundationRuntime,
     FoundationSummary,
@@ -28,6 +30,10 @@ from gridcast.api_models import (
 )
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, benchmark_week, display_model
+from gridcast.extended_models import (
+    load_extended_benchmark_bundle,
+    package_versions,
+)
 from gridcast.foundation_models import (
     TIMESFM_2P5,
     TIMESFM_3,
@@ -41,6 +47,7 @@ QUANTILE_DECISIONS_PATH = Path("artifacts/probabilistic/decision_costs.csv")
 FOUNDATION_SUMMARY_PATH = Path("artifacts/foundation/timesfm-2.5-200m/summary.json")
 FOUNDATION3_SUMMARY_PATH = Path("artifacts/foundation/timesfm-3.0/summary.json")
 COMPARISON_SUMMARY_PATH = Path("artifacts/model-comparison/summary.json")
+EXTENDED_BENCHMARK_DIR = Path("artifacts/benchmark-extended")
 
 
 class ForecastNotFoundError(LookupError):
@@ -171,6 +178,61 @@ class GridCastService:
             )
             for _, row in selected.iterrows()
         ]
+
+    async def extended_benchmark(self) -> ExtendedBenchmarkResponse:
+        """Return optional booster results and validation-only AutoML selection."""
+        if not (EXTENDED_BENCHMARK_DIR / "summary.json").exists():
+            raise ForecastNotFoundError(
+                "extended benchmark artifacts not found; run `make benchmark-extended`"
+            )
+        try:
+            bundle = load_extended_benchmark_bundle(EXTENDED_BENCHMARK_DIR)
+            holdout = bundle.leaderboard.loc[
+                bundle.leaderboard[Col.SPLIT].eq(HISTORICAL_HOLDOUT_SPLIT)
+            ].sort_values("mae")
+            entries = [
+                LeaderboardEntry(
+                    split=str(row[Col.SPLIT]),
+                    model=str(row[Col.MODEL]),
+                    label=display_model(str(row[Col.MODEL])),
+                    folds=int(row["folds"]),
+                    observations=int(row["observations"]),
+                    mae_mw=float(row["mae"]),
+                    rmse_mw=float(row["rmse"]),
+                    mase=float(row["mase"]),
+                    improvement_vs_weekly_percent=float(
+                        row["mae_improvement_vs_weekly_pct"]
+                    ),
+                )
+                for _, row in holdout.iterrows()
+            ]
+            return ExtendedBenchmarkResponse(
+                leaderboard=entries,
+                selected_model=str(bundle.selection["selected_model"]),
+                selection_split="validation",
+                holdout_target_used_for_selection=False,
+                candidate_validation_mae=cast(
+                    dict[str, float], bundle.selection["candidate_validation_mae"]
+                ),
+                package_versions=package_versions(bundle.selection),
+                comparisons=[
+                    ExtendedModelComparison.model_validate(
+                        {
+                            key: value.item() if hasattr(value, "item") else value
+                            for key, value in row.items()
+                        }
+                    )
+                    for row in bundle.comparisons.to_dict(orient="records")
+                ],
+                sensitivity=cast(
+                    list[dict[str, bool | float | int | str]],
+                    bundle.sensitivity.to_dict(orient="records"),
+                ),
+            )
+        except (KeyError, OSError, ValueError) as error:
+            raise InvalidArtifactError(
+                f"invalid extended benchmark artifact: {error}"
+            ) from error
 
     async def point_forecasts(
         self, split: str, fold: int, models: list[str] | None

@@ -11,6 +11,7 @@ from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, Col
 from gridcast.dashboard_data import DashboardData, MissingArtifactsError
 from gridcast.foundation_models import TIMESFM_2P5, TIMESFM_3
 from gridcast.model_comparison import COMPARISONS
+from gridcast.provenance import file_sha256
 
 
 def _service() -> GridCastService:
@@ -167,6 +168,261 @@ async def test_leaderboard_is_sorted_by_mae(client: httpx.AsyncClient) -> None:
         "seasonal_naive_168h",
     ]
     assert payload[0]["label"] == "LightGBM + weather + holidays"
+
+
+def _write_extended_bundle(tmp_path: Path) -> None:
+    leaderboard_path = tmp_path / "leaderboard.csv"
+    selection_path = tmp_path / "model_selection.json"
+    comparisons_path = tmp_path / "extended_comparisons.csv"
+    sensitivity_path = tmp_path / "extended_comparison_sensitivity.csv"
+    manifest_path = tmp_path / "experiment_manifest.json"
+    candidate_mae = {
+        "lightgbm_exogenous": 2901.57,
+        "hist_gradient_boosting_exogenous": 2895.70,
+        "catboost_exogenous": 2842.20,
+        "xgboost_exogenous": 2916.48,
+        "automl_exogenous": 2842.20,
+    }
+    validation_mae = {
+        "lightgbm_exogenous": 3908.8,
+        "hist_gradient_boosting_exogenous": 3948.9,
+        "catboost_exogenous": 3821.2,
+        "xgboost_exogenous": 4165.3,
+    }
+    leaderboard = pd.DataFrame(
+        [
+            {
+                Col.SPLIT: HISTORICAL_HOLDOUT_SPLIT,
+                Col.MODEL: model,
+                "folds": 52,
+                "observations": 8736,
+                "mae": mae,
+                "rmse": 3851.4
+                if "catboost" in model or model == "automl_exogenous"
+                else 4000.0,
+                "mase": 0.942
+                if "catboost" in model or model == "automl_exogenous"
+                else 0.96,
+                "mae_improvement_vs_weekly_pct": 20.72,
+            }
+            for model, mae in candidate_mae.items()
+        ]
+        + [
+            {
+                Col.SPLIT: "validation",
+                Col.MODEL: model,
+                "folds": 12,
+                "observations": 2016,
+                "mae": mae,
+                "rmse": 5000.0,
+                "mase": 1.2,
+                "mae_improvement_vs_weekly_pct": 10.0,
+            }
+            for model, mae in validation_mae.items()
+        ]
+    )
+    leaderboard.to_csv(leaderboard_path, index=False)
+    selection_path.write_text(
+        json.dumps(
+            {
+                "selected_model": "catboost_exogenous",
+                "selection_split": "validation",
+                "holdout_target_used_for_selection": False,
+                "candidate_validation_mae": validation_mae,
+                "package_versions": {
+                    "catboost": "1.2.10",
+                    "lightgbm": "4.7.0",
+                    "scikit-learn": "1.9.0",
+                    "xgboost": "3.4.1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    comparisons = pd.DataFrame(
+        [
+            {
+                "candidate_model": model,
+                "reference_model": "lightgbm_exogenous",
+                "mean_mae_improvement_mw": gain,
+                "wins": wins,
+                "folds": 52,
+                "ci_low_mw": gain - 70.0,
+                "ci_high_mw": gain + 70.0,
+                "adjusted_ci_low_mw": gain - 90.0,
+                "adjusted_ci_high_mw": gain + 90.0,
+                "simultaneous_superiority_supported": False,
+                "exploratory": True,
+                "block_length_folds": 4,
+                "bootstrap_replicates": 100_000,
+                "bootstrap_seed": 20_260_906,
+                "family_size": 3,
+                "familywise_confidence_level": 0.95,
+                "adjusted_per_comparison_confidence_level": 1.0 - 0.05 / 3.0,
+            }
+            for model, gain, wins in [
+                ("hist_gradient_boosting_exogenous", 5.87, 25),
+                ("catboost_exogenous", 59.37, 30),
+                ("xgboost_exogenous", -14.91, 29),
+            ]
+        ]
+    )
+    comparisons.to_csv(comparisons_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "candidate_model": model,
+                "block_length_folds": block,
+                "bootstrap_seed": (
+                    20_260_906
+                    if block == 4
+                    else 20_260_906 + [2, 4, 6, 8, 13, 26].index(block) + 1
+                ),
+                "adjusted_ci_low_mw": (gain - 90.0 if block == 4 else gain - 100.0),
+                "adjusted_ci_high_mw": (gain + 90.0 if block == 4 else gain + 100.0),
+                "simultaneous_superiority_supported": False,
+            }
+            for model, gain in [
+                ("hist_gradient_boosting_exogenous", 5.87),
+                ("catboost_exogenous", 59.37),
+                ("xgboost_exogenous", -14.91),
+            ]
+            for block in [2, 4, 6, 8, 13, 26]
+        ]
+    ).to_csv(sensitivity_path, index=False)
+    config = {
+        "horizon": 168,
+        "validation_folds": 12,
+        "holdout_folds": 52,
+        "max_train_hours": 43800,
+        "n_estimators": 300,
+        "extended_models": True,
+    }
+    boundaries = {
+        "validation_start": "2017-05-12T01:00:00",
+        "holdout_start": "2017-08-04T01:00:00",
+        "holdout_end": "2018-08-03T00:00:00",
+    }
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "experiment": "pjme-point-benchmark",
+                "config": config,
+                "boundaries": boundaries,
+                "git_dirty": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = {
+        "config": config,
+        **boundaries,
+        "extended_comparison_protocol": {
+            "block_length_folds": 4,
+            "bootstrap_seed": 20_260_906,
+            "sensitivity_block_lengths": [2, 4, 6, 8, 13, 26],
+        },
+        "artifact_sha256": {
+            path.name: file_sha256(path)
+            for path in (
+                leaderboard_path,
+                selection_path,
+                comparisons_path,
+                sensitivity_path,
+                manifest_path,
+            )
+        },
+    }
+    (tmp_path / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_extended_benchmark_endpoint_returns_optional_results(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_extended_bundle(tmp_path)
+    monkeypatch.setattr("gridcast.api_service.EXTENDED_BENCHMARK_DIR", tmp_path)
+
+    response = await client.get("/api/v1/benchmark/extended")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_model"] == "catboost_exogenous"
+    assert payload["holdout_target_used_for_selection"] is False
+    assert payload["comparisons"][1]["adjusted_ci_low_mw"] == pytest.approx(-30.63)
+    assert len(payload["sensitivity"]) == 18
+
+
+@pytest.mark.anyio
+async def test_extended_benchmark_rejects_holdout_selection(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection_path = tmp_path / "model_selection.json"
+    _write_extended_bundle(tmp_path)
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["selection_split"] = "historical_holdout"
+    selection["holdout_target_used_for_selection"] = True
+    selection_path.write_text(
+        json.dumps(selection),
+        encoding="utf-8",
+    )
+    summary_path = tmp_path / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["artifact_sha256"]["model_selection.json"] = file_sha256(selection_path)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.EXTENDED_BENCHMARK_DIR", tmp_path)
+
+    response = await client.get("/api/v1/benchmark/extended")
+
+    assert response.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_extended_benchmark_rejects_stale_artifact_digest(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_extended_bundle(tmp_path)
+    (tmp_path / "leaderboard.csv").write_text("corrupted", encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.EXTENDED_BENCHMARK_DIR", tmp_path)
+
+    response = await client.get("/api/v1/benchmark/extended")
+
+    assert response.status_code == 503
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mutation", ["dirty", "config", "boundaries"])
+async def test_extended_benchmark_rejects_invalid_manifest(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    _write_extended_bundle(tmp_path)
+    manifest_path = tmp_path / "experiment_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "dirty":
+        manifest["git_dirty"] = True
+    elif mutation == "config":
+        manifest["config"]["horizon"] = 24
+    else:
+        manifest["boundaries"]["holdout_end"] = "wrong"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    summary_path = tmp_path / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["artifact_sha256"]["experiment_manifest.json"] = file_sha256(manifest_path)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.EXTENDED_BENCHMARK_DIR", tmp_path)
+
+    response = await client.get("/api/v1/benchmark/extended")
+
+    assert response.status_code == 503
 
 
 @pytest.mark.anyio

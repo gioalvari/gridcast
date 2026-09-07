@@ -12,8 +12,8 @@ one canonical energy-forecasting repository rather than two overlapping ones.
 ![Historical holdout model comparison](docs/assets/historical-holdout-mae.svg)
 
 On the repeatedly inspected 52-week historical holdout, the combined LightGBM
-model has the lowest observed aggregate MAE among task-trained and classical
-models: **19.07%** below the weekly
+model has the lowest observed aggregate MAE in the primary benchmark:
+**19.07%** below the weekly
 seasonal-naive baseline, **3.07%** below the stronger daily seasonal-naive
 baseline, and **2.38%** below base LightGBM. The daily baseline wins the most
 individual weeks, and uncertainty around these small paired differences is not
@@ -39,6 +39,12 @@ Its adjusted interval is **-357.03 to 708.19 MW**. See
 [MODEL_COMPARISON.md](MODEL_COMPARISON.md) for the specified six-pair family and
 multiplicity-adjusted results.
 
+An optional extended benchmark adds CatBoost, XGBoost, scikit-learn histogram
+boosting, and a validation-only AutoML selection policy. CatBoost is selected on
+validation and reaches **2,842.20 MW MAE** on the holdout, but its adjusted paired
+interval against LightGBM crosses zero. See
+[EXTENDED_MODELS.md](EXTENDED_MODELS.md).
+
 ## Why this project
 
 Forecasting examples often use random train/test splits, which leak future
@@ -56,6 +62,7 @@ make install
 make full
 make demo
 make comparison  # after benchmark and both optional TimesFM runs
+make benchmark-extended  # after `make install-extended`
 ```
 
 The demo writes the following reproducible artifacts to `artifacts/demo/`:
@@ -225,6 +232,7 @@ The Streamlit dashboard opens at `http://localhost:8501` and provides:
 - calibrated probabilistic intervals and coverage diagnostics;
 - the optional TimesFM zero-shot benchmark and runtime metadata;
 - dependence-aware paired effects and confidence intervals;
+- optional CatBoost, XGBoost, histogram boosting, and validation-only AutoML;
 - optional local fit, latency, size, and memory measurements;
 - a concise explanation of the anti-leakage evaluation contract.
 
@@ -254,6 +262,7 @@ OpenAPI documentation is available at `http://localhost:8000/docs`. The API
 exposes health, metadata, leaderboard, point-forecast, calibrated probabilistic
 forecast, decision-sensitivity, foundation-model, and optional local-performance
 endpoints, plus optional statistical comparisons at `/api/v1/comparisons`. It
+also exposes the optional booster study at `/api/v1/benchmark/extended`. It
 returns `503` with setup instructions when core artifacts are
 unavailable and `404` if optional results have not been generated.
 The `/health` endpoint reports process liveness, while `/ready` returns success
