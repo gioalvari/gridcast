@@ -395,10 +395,19 @@ def test_extended_writer_creates_hash_validated_bundle(
     monkeypatch.setattr("gridcast.benchmark._plot_leaderboard", lambda *_: None)
     monkeypatch.setattr("gridcast.benchmark._plot_decision_costs", lambda *_: None)
     monkeypatch.setattr("gridcast.benchmark._plot_latest_holdout_week", lambda *_: None)
+    monkeypatch.setattr("gridcast.provenance.git_commit", lambda: "test-commit")
+    monkeypatch.setattr("gridcast.provenance.git_worktree_state", lambda: (False, None))
+    load = pd.DataFrame(
+        {
+            Col.TIMESTAMP: pd.date_range("2017-01-01", periods=2, freq="h"),
+            Col.TARGET: [1.0, 1.0],
+        }
+    )
     write_benchmark_artifacts(
         result,
         BenchmarkConfig(extended_models=True),
         tmp_path,
+        load,
     )
 
     bundle = load_extended_benchmark_bundle(tmp_path)

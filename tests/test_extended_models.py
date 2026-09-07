@@ -134,6 +134,7 @@ def _bundle_tables() -> tuple[
         ("selection_split", "split must be validation"),
         ("holdout_used", "must not use holdout"),
         ("candidate_set", "candidate set is incomplete"),
+        ("nonnumeric_score", "scores must be numeric"),
         ("nonfinite_score", "scores must be finite"),
         ("score_mismatch", "scores do not match"),
         ("wrong_winner", "not validation winner"),
@@ -157,6 +158,9 @@ def test_selection_validator_rejects_invalid_contract(
         selection["holdout_target_used_for_selection"] = True
     elif mutation == "candidate_set":
         selection["candidate_validation_mae"] = {LIGHTGBM_EXOGENOUS_MODEL: 1.0}
+    elif mutation == "nonnumeric_score":
+        scores = cast_scores(selection)
+        scores["catboost_exogenous"] = None  # type: ignore[assignment]
     elif mutation == "nonfinite_score":
         scores = cast_scores(selection)
         scores["catboost_exogenous"] = np.nan

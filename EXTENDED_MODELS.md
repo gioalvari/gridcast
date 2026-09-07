@@ -40,7 +40,7 @@ The validation-only policy selected CatBoost:
 |---|---:|---:|---:|
 | CatBoost exogenous | **3,821.19** | **2,842.20** | **0.942** |
 | LightGBM exogenous | 3,908.83 | 2,901.57 | 0.962 |
-| HistGradientBoosting exogenous | 3,948.95 | 2,895.70 | 0.960 |
+| HistGradientBoosting exogenous | 3,938.97 | 2,905.67 | 0.963 |
 | XGBoost exogenous | 4,165.32 | 2,916.48 | 0.967 |
 
 CatBoost has the lowest observed task-trained holdout MAE and improves on
@@ -49,9 +49,15 @@ block bootstrap gives a marginal 95% interval of `[-6.94, 121.70] MW` and a
 three-comparison Bonferroni-adjusted interval of `[-21.70, 134.34] MW`.
 HistGradientBoosting and XGBoost also have adjusted intervals crossing zero.
 Under the specified exploratory four-week circular-block protocol, none of the
-three adjusted intervals excludes zero. Sensitivity with circular blocks of
-2, 4, 6, 8, 13, and 26 weeks is written beside the primary comparison because
-the conclusion can depend on block specification.
+three adjusted intervals excludes zero. CatBoost's adjusted lower bound remains
+below zero for blocks of 2, 4, 6, and 8 weeks, but becomes positive for blocks of
+13 and 26 weeks. Sensitivity with all six block lengths is written beside the
+primary comparison because the conclusion depends on block specification.
+
+The published run manifest records its exact source commit with
+`git_dirty=false`. Its summary hashes the manifest, leaderboard, model selection,
+primary comparisons, and sensitivity table; API and dashboard validate the
+complete bundle before use.
 
 ## Limitations
 

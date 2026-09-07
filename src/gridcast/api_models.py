@@ -206,6 +206,7 @@ class ExtendedBenchmarkResponse(APIModel):
     candidate_validation_mae: dict[str, float]
     package_versions: dict[str, str]
     comparisons: list[ExtendedModelComparison]
+    sensitivity: list[dict[str, bool | float | int | str]]
 
     @model_validator(mode="after")
     def validate_selection(self) -> Self:

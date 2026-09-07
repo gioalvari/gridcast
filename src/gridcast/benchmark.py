@@ -652,28 +652,19 @@ def write_benchmark_artifacts(
         .max()
         .isoformat(),
     }
-    if config.extended_models:
-        metadata["artifact_sha256"] = {
-            filename: file_sha256(output_dir / filename)
-            for filename in (
-                "leaderboard.csv",
-                "model_selection.json",
-                "extended_comparisons.csv",
-                "extended_comparison_sensitivity.csv",
+    if data is not None or config.extended_models:
+        if data is not None:
+            datasets = {"load": data}
+            if weather is not None:
+                datasets["weather"] = weather
+            features = (
+                list(build_exogenous_features(data, weather).columns)
+                if weather is not None
+                else list(build_forecast_features(data).columns)
             )
-        }
-    summary_temp = output_dir / ".summary.json.tmp"
-    summary_temp.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    summary_temp.replace(summary_path)
-    if data is not None:
-        datasets = {"load": data}
-        if weather is not None:
-            datasets["weather"] = weather
-        features = (
-            list(build_exogenous_features(data, weather).columns)
-            if weather is not None
-            else list(build_forecast_features(data).columns)
-        )
+        else:
+            datasets = {"forecasts": result.forecasts}
+            features = []
         write_manifest(
             build_experiment_manifest(
                 "pjme-point-benchmark",
@@ -691,6 +682,20 @@ def write_benchmark_artifacts(
     _plot_leaderboard(result.leaderboard, output_dir / "leaderboard.png")
     _plot_decision_costs(decision_costs, output_dir / "decision_costs.png")
     _plot_latest_holdout_week(result.forecasts, output_dir / "latest_holdout_week.png")
+    if config.extended_models:
+        metadata["artifact_sha256"] = {
+            filename: file_sha256(output_dir / filename)
+            for filename in (
+                "leaderboard.csv",
+                "model_selection.json",
+                "extended_comparisons.csv",
+                "extended_comparison_sensitivity.csv",
+                "experiment_manifest.json",
+            )
+        }
+    summary_temp = output_dir / ".summary.json.tmp"
+    summary_temp.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    summary_temp.replace(summary_path)
 
 
 def _build_leaderboard(

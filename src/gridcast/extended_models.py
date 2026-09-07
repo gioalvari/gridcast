@@ -1,3 +1,5 @@
+import hashlib
+import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +15,6 @@ from gridcast.benchmark import (
     LIGHTGBM_EXOGENOUS_MODEL,
 )
 from gridcast.columns import HISTORICAL_HOLDOUT_SPLIT, VALIDATION_SPLIT, Col
-from gridcast.provenance import file_sha256
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ def load_extended_benchmark_bundle(directory: Path) -> ExtendedBenchmarkBundle:
     summary_path = directory / "summary.json"
     if not summary_path.exists():
         raise FileNotFoundError(summary_path)
-    summary = _read_object(summary_path)
+    summary = _decode_object(summary_path.read_bytes(), summary_path)
     artifact_hashes = summary.get("artifact_sha256")
     if not isinstance(artifact_hashes, dict):
         raise ValueError("extended summary does not contain artifact hashes")
@@ -41,18 +42,30 @@ def load_extended_benchmark_bundle(directory: Path) -> ExtendedBenchmarkBundle:
         "model_selection.json",
         "extended_comparisons.csv",
         "extended_comparison_sensitivity.csv",
+        "experiment_manifest.json",
     }
     if set(artifact_hashes) != required_files:
         raise ValueError("extended artifact hash set is incomplete")
+    payloads: dict[str, bytes] = {}
     for filename, expected in artifact_hashes.items():
         path = directory / str(filename)
-        if file_sha256(path) != expected:
+        payload = path.read_bytes()
+        payloads[str(filename)] = payload
+        if hashlib.sha256(payload).hexdigest() != expected:
             raise ValueError(f"extended artifact digest does not match: {filename}")
 
-    leaderboard = pd.read_csv(directory / "leaderboard.csv")
-    selection = _read_object(directory / "model_selection.json")
-    comparisons = pd.read_csv(directory / "extended_comparisons.csv")
-    sensitivity = pd.read_csv(directory / "extended_comparison_sensitivity.csv")
+    leaderboard = pd.read_csv(io.BytesIO(payloads["leaderboard.csv"]))
+    selection = _decode_object(
+        payloads["model_selection.json"], directory / "model_selection.json"
+    )
+    comparisons = pd.read_csv(io.BytesIO(payloads["extended_comparisons.csv"]))
+    sensitivity = pd.read_csv(
+        io.BytesIO(payloads["extended_comparison_sensitivity.csv"])
+    )
+    manifest = _decode_object(
+        payloads["experiment_manifest.json"], directory / "experiment_manifest.json"
+    )
+    _validate_manifest(manifest, summary)
     _validate_selection(leaderboard, selection)
     _validate_comparisons(leaderboard, comparisons, sensitivity, summary)
     return ExtendedBenchmarkBundle(
@@ -65,10 +78,34 @@ def load_extended_benchmark_bundle(directory: Path) -> ExtendedBenchmarkBundle:
 
 
 def _read_object(path: Path) -> dict[str, object]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    return _decode_object(path.read_bytes(), path)
+
+
+def _decode_object(payload_bytes: bytes, path: Path) -> dict[str, object]:
+    payload = json.loads(payload_bytes.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"extended artifact must contain an object: {path}")
     return payload
+
+
+def _validate_manifest(
+    manifest: dict[str, object],
+    summary: dict[str, object],
+) -> None:
+    if manifest.get("experiment") != "pjme-point-benchmark":
+        raise ValueError("extended manifest experiment is invalid")
+    if manifest.get("config") != summary.get("config"):
+        raise ValueError("extended manifest config does not match summary")
+    boundaries = manifest.get("boundaries")
+    expected_boundaries = {
+        "validation_start": summary.get("validation_start"),
+        "holdout_start": summary.get("holdout_start"),
+        "holdout_end": summary.get("holdout_end"),
+    }
+    if boundaries != expected_boundaries:
+        raise ValueError("extended manifest boundaries do not match summary")
+    if manifest.get("git_dirty") is not False:
+        raise ValueError("extended publication manifest must be clean")
 
 
 def _validate_selection(
@@ -99,7 +136,10 @@ def _validate_selection(
     scores = selection.get("candidate_validation_mae")
     if not isinstance(scores, dict) or set(scores) != set(AUTOML_CANDIDATES):
         raise ValueError("extended validation candidate set is incomplete")
-    finite_scores = {str(model): float(value) for model, value in scores.items()}
+    try:
+        finite_scores = {str(model): float(value) for model, value in scores.items()}
+    except (TypeError, ValueError) as error:
+        raise ValueError("extended validation scores must be numeric") from error
     if not np.isfinite(list(finite_scores.values())).all():
         raise ValueError("extended validation scores must be finite")
     validation = leaderboard.loc[

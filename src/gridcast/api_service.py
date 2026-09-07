@@ -224,6 +224,10 @@ class GridCastService:
                     )
                     for row in bundle.comparisons.to_dict(orient="records")
                 ],
+                sensitivity=cast(
+                    list[dict[str, bool | float | int | str]],
+                    bundle.sensitivity.to_dict(orient="records"),
+                ),
             )
         except (KeyError, OSError, ValueError) as error:
             raise InvalidArtifactError(

@@ -1,4 +1,5 @@
 import importlib.util
+import os
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,8 @@ from gridcast.models import create_point_forecaster
 def test_real_optional_backend_fits_and_predicts(estimator: str) -> None:
     """Smoke-test native optional packages when the extended extra is installed."""
     if importlib.util.find_spec(estimator) is None:
+        if os.environ.get("GRIDCAST_REQUIRE_EXTENDED") == "1":
+            pytest.fail("extended model extra is not installed")
         pytest.skip("extended model extra is not installed")
     features = pd.DataFrame(
         {

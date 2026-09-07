@@ -688,6 +688,18 @@ def _render_extended_models() -> None:
         hide_index=True,
         width="stretch",
     )
+    sensitivity = bundle.sensitivity.copy()
+    sensitivity["Candidate"] = sensitivity["candidate_model"].map(display_model)
+    sensitivity["Adjusted lower bound (MW)"] = sensitivity["adjusted_ci_low_mw"].round(
+        1
+    )
+    sensitivity_table = sensitivity.pivot(
+        index="Candidate",
+        columns="block_length_folds",
+        values="Adjusted lower bound (MW)",
+    ).reset_index()
+    st.caption("Sensitivity: adjusted lower bound by circular block length")
+    st.dataframe(sensitivity_table, hide_index=True, width="stretch")
     st.warning(
         "This is an exploratory extension added after inspecting the historical "
         "holdout. AutoML selects one fixed candidate from validation only; it is "

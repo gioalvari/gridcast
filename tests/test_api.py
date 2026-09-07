@@ -175,6 +175,7 @@ def _write_extended_bundle(tmp_path: Path) -> None:
     selection_path = tmp_path / "model_selection.json"
     comparisons_path = tmp_path / "extended_comparisons.csv"
     sensitivity_path = tmp_path / "extended_comparison_sensitivity.csv"
+    manifest_path = tmp_path / "experiment_manifest.json"
     candidate_mae = {
         "lightgbm_exogenous": 2901.57,
         "hist_gradient_boosting_exogenous": 2895.70,
@@ -289,7 +290,33 @@ def _write_extended_bundle(tmp_path: Path) -> None:
             for block in [2, 4, 6, 8, 13, 26]
         ]
     ).to_csv(sensitivity_path, index=False)
+    config = {
+        "horizon": 168,
+        "validation_folds": 12,
+        "holdout_folds": 52,
+        "max_train_hours": 43800,
+        "n_estimators": 300,
+        "extended_models": True,
+    }
+    boundaries = {
+        "validation_start": "2017-05-12T01:00:00",
+        "holdout_start": "2017-08-04T01:00:00",
+        "holdout_end": "2018-08-03T00:00:00",
+    }
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "experiment": "pjme-point-benchmark",
+                "config": config,
+                "boundaries": boundaries,
+                "git_dirty": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     summary = {
+        "config": config,
+        **boundaries,
         "extended_comparison_protocol": {
             "block_length_folds": 4,
             "bootstrap_seed": 20_260_906,
@@ -302,6 +329,7 @@ def _write_extended_bundle(tmp_path: Path) -> None:
                 selection_path,
                 comparisons_path,
                 sensitivity_path,
+                manifest_path,
             )
         },
     }
@@ -324,6 +352,7 @@ async def test_extended_benchmark_endpoint_returns_optional_results(
     assert payload["selected_model"] == "catboost_exogenous"
     assert payload["holdout_target_used_for_selection"] is False
     assert payload["comparisons"][1]["adjusted_ci_low_mw"] == pytest.approx(-30.63)
+    assert len(payload["sensitivity"]) == 18
 
 
 @pytest.mark.anyio
@@ -360,6 +389,35 @@ async def test_extended_benchmark_rejects_stale_artifact_digest(
 ) -> None:
     _write_extended_bundle(tmp_path)
     (tmp_path / "leaderboard.csv").write_text("corrupted", encoding="utf-8")
+    monkeypatch.setattr("gridcast.api_service.EXTENDED_BENCHMARK_DIR", tmp_path)
+
+    response = await client.get("/api/v1/benchmark/extended")
+
+    assert response.status_code == 503
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mutation", ["dirty", "config", "boundaries"])
+async def test_extended_benchmark_rejects_invalid_manifest(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    _write_extended_bundle(tmp_path)
+    manifest_path = tmp_path / "experiment_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "dirty":
+        manifest["git_dirty"] = True
+    elif mutation == "config":
+        manifest["config"]["horizon"] = 24
+    else:
+        manifest["boundaries"]["holdout_end"] = "wrong"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    summary_path = tmp_path / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["artifact_sha256"]["experiment_manifest.json"] = file_sha256(manifest_path)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
     monkeypatch.setattr("gridcast.api_service.EXTENDED_BENCHMARK_DIR", tmp_path)
 
     response = await client.get("/api/v1/benchmark/extended")
