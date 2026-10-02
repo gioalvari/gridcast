@@ -1,0 +1,11 @@
+version: 1
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: "<TASK_DEFINITION_ARN>"
+        LoadBalancerInfo:
+          ContainerName: serving
+          ContainerPort: 8080
+# Hooks are deliberately omitted. CodeDeploy deployment-group alarms gate traffic;
+# add BeforeAllowTraffic/AfterAllowTraffic Lambda hooks only after supplying their ARNs.
