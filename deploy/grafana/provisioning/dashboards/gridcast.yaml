@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: GridCast
+    folder: Serving
+    type: file
+    options: {path: /var/lib/grafana/dashboards}
