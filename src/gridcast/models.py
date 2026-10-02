@@ -4,7 +4,7 @@ from typing import Protocol, Self, cast
 
 import numpy as np
 import pandas as pd
-from lightgbm import LGBMRegressor
+from lightgbm import Booster, LGBMRegressor
 from numpy.typing import NDArray
 from sklearn.ensemble import HistGradientBoostingRegressor
 
@@ -207,6 +207,19 @@ class LightGBMLoadForecaster:
             raise RuntimeError(msg)
         _validate_prediction_features(features)
         return _validated_prediction(self._model.predict(features), len(features))
+
+    @property
+    def booster(self) -> Booster:
+        """Return the fitted native LightGBM booster.
+
+        Returns
+        -------
+        lightgbm.Booster
+            Native model suitable for versioned bundle serialization.
+        """
+        if self._model is None:
+            raise RuntimeError("fit must be called before accessing booster")
+        return self._model.booster_
 
 
 class CatBoostLoadForecaster:
@@ -542,3 +555,16 @@ class LightGBMQuantileForecaster:
             raise RuntimeError(msg)
         _validate_prediction_features(features)
         return _validated_prediction(self._model.predict(features), len(features))
+
+    @property
+    def booster(self) -> Booster:
+        """Return the fitted native LightGBM booster.
+
+        Returns
+        -------
+        lightgbm.Booster
+            Native model suitable for versioned bundle serialization.
+        """
+        if self._model is None:
+            raise RuntimeError("fit must be called before accessing booster")
+        return self._model.booster_

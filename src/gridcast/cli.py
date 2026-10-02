@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import pandas as pd
+
 from gridcast.backtesting import BacktestConfig, rolling_backtest
 from gridcast.benchmark import (
     BenchmarkConfig,
@@ -32,6 +34,15 @@ from gridcast.probabilistic import (
     ProbabilisticConfig,
     run_probabilistic_benchmark,
     write_probabilistic_artifacts,
+)
+from gridcast.provenance import git_commit
+from gridcast.serving.bundle import load_bundle, train_bundle, write_bundle
+from gridcast.serving.registry import publish_bundle
+from gridcast.serving.rollout import (
+    EnvoyTrafficController,
+    PrometheusMetricsSource,
+    policy_from_dict,
+    run_rollout,
 )
 from gridcast.weather import ingest_temperature
 from gridcast.weather_runs import ArchivedWeatherClient, validate_weather_run_coverage
@@ -217,6 +228,31 @@ def build_parser() -> argparse.ArgumentParser:
         "check-weather", help="validate one archived ECMWF run"
     )
     check_weather.add_argument("--delivery-date", required=True)
+    model = subparsers.add_parser("model", help="package and publish serving models")
+    model_subparsers = model.add_subparsers(dest="model_command", required=True)
+    package = model_subparsers.add_parser(
+        "package", help="train and write a model bundle"
+    )
+    package.add_argument("--version", required=True)
+    package.add_argument("--output-dir", type=Path, required=True)
+    source = package.add_mutually_exclusive_group(required=True)
+    source.add_argument("--data", type=Path)
+    source.add_argument("--synthetic", action="store_true")
+    package.add_argument("--n-estimators", type=int, default=300)
+    package.add_argument("--calibration-hours", type=int, default=24 * 7 * 4)
+    verify = model_subparsers.add_parser("verify", help="verify a model bundle")
+    verify.add_argument("directory", type=Path)
+    publish = model_subparsers.add_parser("publish", help="publish an immutable bundle")
+    publish.add_argument("directory", type=Path)
+    publish.add_argument("--uri", required=True)
+    rollout = subparsers.add_parser(
+        "rollout", help="progressively route traffic to a canary"
+    )
+    rollout.add_argument("--prometheus-url", required=True)
+    rollout.add_argument("--envoy-admin-url", required=True)
+    rollout.add_argument("--policy", type=Path, required=True)
+    rollout.add_argument("--report", type=Path, required=True)
+    rollout.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -332,8 +368,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             entsoe_report.resolution_minutes,
         )
     elif args.command == "eda":
-        import pandas as pd
-
         eda_summary = create_eda_report(pd.read_parquet(args.input), args.output_dir)
         LOGGER.info(
             "EDA complete: %d observations from %s to %s",
@@ -342,8 +376,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             eda_summary["end"],
         )
     elif args.command == "benchmark":
-        import pandas as pd
-
         benchmark_config = BenchmarkConfig(
             horizon=args.horizon,
             validation_folds=args.validation_folds,
@@ -378,8 +410,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             winner["mase"],
         )
     elif args.command == "probabilistic":
-        import pandas as pd
-
         probabilistic_config = ProbabilisticConfig(
             horizon=args.horizon,
             validation_folds=args.validation_folds,
@@ -452,8 +482,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_dir.resolve(),
         )
     elif args.command == "performance":
-        import pandas as pd
-
         performance_config = PerformanceConfig(
             horizon=args.horizon,
             max_train_hours=args.max_train_hours,
@@ -495,4 +523,55 @@ def main(argv: Sequence[str] | None = None) -> int:
                 len(counts),
                 len(contract.delivery_intervals(delivery_date)),
             )
+    elif args.command == "model" and args.model_command == "package":
+        data = (
+            generate_synthetic_load(periods=24 * 7 * 10)
+            if args.synthetic
+            else _load_canonical_data(args.data)
+        )
+        trained = train_bundle(
+            data,
+            args.version,
+            n_estimators=args.n_estimators,
+            calibration_hours=args.calibration_hours,
+            git_commit=git_commit(),
+        )
+        output = write_bundle(trained, args.output_dir)
+        LOGGER.info("Wrote model bundle %s to %s", args.version, output.resolve())
+    elif args.command == "model" and args.model_command == "verify":
+        bundle = load_bundle(args.directory)
+        LOGGER.info(
+            "Verified model bundle %s (%d training rows)",
+            bundle.manifest.model_version,
+            bundle.manifest.training.rows,
+        )
+    elif args.command == "model" and args.model_command == "publish":
+        publish_bundle(args.directory, args.uri)
+        LOGGER.info("Published model bundle to %s", args.uri)
+    elif args.command == "rollout":
+        policy = policy_from_dict(json.loads(args.policy.read_text(encoding="utf-8")))
+        rollout_report = run_rollout(
+            policy,
+            PrometheusMetricsSource(args.prometheus_url),
+            EnvoyTrafficController(args.envoy_admin_url),
+            dry_run=args.dry_run,
+        )
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(
+            json.dumps(rollout_report.as_dict(), indent=2) + "\n", encoding="utf-8"
+        )
+        LOGGER.info(
+            "Rollout %s; report written to %s", rollout_report.outcome, args.report
+        )
+        if rollout_report.outcome == "rolled_back":
+            return 2
     return 0
+
+
+def _load_canonical_data(path: Path) -> pd.DataFrame:
+    """Load a canonical PJME serving frame from parquet or CSV."""
+    if path.suffix.lower() == ".parquet":
+        return pd.read_parquet(path)
+    if path.suffix.lower() == ".csv":
+        return pd.read_csv(path, parse_dates=["dte_reference_date"])
+    raise ValueError("--data must reference a canonical parquet or CSV file")
