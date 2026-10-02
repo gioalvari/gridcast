@@ -15,6 +15,7 @@ class ServingSettings:
     environment: str
     request_timeout_s: float
     max_in_flight: int
+    max_admitted: int
     breaker_failures: int
     breaker_reset_s: float
     max_body_bytes: int
@@ -28,6 +29,7 @@ class ServingSettings:
         model_uri = environ.get("GRIDCAST_MODEL_URI", "")
         if not model_uri:
             raise ValueError("GRIDCAST_MODEL_URI is required for serving")
+        max_in_flight = _integer(environ, "GRIDCAST_MAX_IN_FLIGHT", 32)
         settings = cls(
             model_uri=model_uri,
             model_cache_dir=Path(
@@ -35,7 +37,8 @@ class ServingSettings:
             ),
             environment=environ.get("GRIDCAST_ENV", "local"),
             request_timeout_s=_float(environ, "GRIDCAST_REQUEST_TIMEOUT_S", 0.5),
-            max_in_flight=_integer(environ, "GRIDCAST_MAX_IN_FLIGHT", 32),
+            max_in_flight=max_in_flight,
+            max_admitted=_integer(environ, "GRIDCAST_MAX_ADMITTED", 2 * max_in_flight),
             breaker_failures=_integer(environ, "GRIDCAST_BREAKER_FAILURES", 5),
             breaker_reset_s=_float(environ, "GRIDCAST_BREAKER_RESET_S", 30.0),
             max_body_bytes=_integer(environ, "GRIDCAST_MAX_BODY_BYTES", 1_048_576),
@@ -46,6 +49,7 @@ class ServingSettings:
         if (
             settings.request_timeout_s <= 0
             or settings.max_in_flight < 1
+            or settings.max_admitted < settings.max_in_flight
             or settings.breaker_failures < 1
             or settings.breaker_reset_s <= 0
             or settings.max_body_bytes < 1

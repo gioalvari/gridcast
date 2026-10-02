@@ -1,4 +1,7 @@
 import { check } from 'k6';
+import { Trend } from 'k6/metrics';
+
+export const okReqDuration = new Trend('ok_req_duration', true);
 
 export const baseUrl = __ENV.BASE_URL || 'http://envoy:8080';
 
@@ -13,6 +16,9 @@ export function payload() {
 }
 
 export function checkForecast(response) {
+  if (response.status === 200) {
+    okReqDuration.add(response.timings.duration);
+  }
   return check(response, {
     'status is 200': (item) => item.status === 200,
     'response schema has 168 ordered intervals': (item) => {

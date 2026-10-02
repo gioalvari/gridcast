@@ -10,12 +10,14 @@ from gridcast.serving.settings import ServingSettings
 def test_settings_defaults_and_all_validation_paths() -> None:
     defaults = ServingSettings.from_env({"GRIDCAST_MODEL_URI": "file:///model"})
     assert defaults.max_in_flight == 32
+    assert defaults.max_admitted == 64
     assert defaults.environment == "local"
     with pytest.raises(ValueError, match="required"):
         ServingSettings.from_env({})
     for name, value, message in (
         ("GRIDCAST_REQUEST_TIMEOUT_S", "x", "numeric"),
         ("GRIDCAST_MAX_IN_FLIGHT", "x", "integer"),
+        ("GRIDCAST_MAX_ADMITTED", "x", "integer"),
         ("GRIDCAST_BREAKER_FAILURES", "x", "integer"),
         ("GRIDCAST_BREAKER_RESET_S", "x", "numeric"),
         ("GRIDCAST_MAX_BODY_BYTES", "x", "integer"),
@@ -29,6 +31,7 @@ def test_settings_defaults_and_all_validation_paths() -> None:
     for name, value in (
         ("GRIDCAST_REQUEST_TIMEOUT_S", "0"),
         ("GRIDCAST_MAX_IN_FLIGHT", "0"),
+        ("GRIDCAST_MAX_ADMITTED", "0"),
         ("GRIDCAST_BREAKER_FAILURES", "0"),
         ("GRIDCAST_BREAKER_RESET_S", "0"),
         ("GRIDCAST_MAX_BODY_BYTES", "0"),
@@ -39,6 +42,14 @@ def test_settings_defaults_and_all_validation_paths() -> None:
             ServingSettings.from_env(
                 {"GRIDCAST_MODEL_URI": "file:///model", name: value}
             )
+    with pytest.raises(ValueError, match="out of range"):
+        ServingSettings.from_env(
+            {
+                "GRIDCAST_MODEL_URI": "file:///model",
+                "GRIDCAST_MAX_IN_FLIGHT": "2",
+                "GRIDCAST_MAX_ADMITTED": "1",
+            }
+        )
     with pytest.raises(ValueError, match="fault injection"):
         ServingSettings.from_env(
             {

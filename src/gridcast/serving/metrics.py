@@ -16,6 +16,7 @@ class ServingMetrics:
     fallbacks: Counter
     circuit_state: Gauge
     in_flight: Gauge
+    admitted_requests: Gauge
     model_info: Gauge
     feature_psi: Histogram
     overload_rejections: Counter
@@ -62,6 +63,11 @@ def create_metrics() -> ServingMetrics:
             "Admitted forecast requests.",
             registry=registry,
         ),
+        admitted_requests=Gauge(
+            "gridcast_admitted_requests",
+            "Forecast requests admitted before request-body parsing.",
+            registry=registry,
+        ),
         model_info=Gauge(
             "gridcast_model_info",
             "Loaded model identity.",
@@ -76,7 +82,8 @@ def create_metrics() -> ServingMetrics:
         ),
         overload_rejections=Counter(
             "gridcast_overload_rejections_total",
-            "Forecast requests rejected because all slots are occupied.",
+            "Forecast requests rejected because an admission limit is occupied.",
+            ["stage"],
             registry=registry,
         ),
         abandoned_predictions=Gauge(

@@ -1,3 +1,4 @@
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -6,8 +7,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gridcast.data import generate_synthetic_load
-from gridcast.serving.app import create_app
+from gridcast.serving.app import (
+    AdmissionController,
+    ForecastAdmissionMiddleware,
+    create_app,
+)
 from gridcast.serving.bundle import load_bundle
+from gridcast.serving.metrics import create_metrics
 from gridcast.serving.predictor import Predictor
 from gridcast.serving.resilience import ConcurrencyLimiter
 from gridcast.serving.settings import ServingSettings
@@ -20,6 +26,7 @@ def settings(**updates: object) -> ServingSettings:
         "environment": "local",
         "request_timeout_s": 1.0,
         "max_in_flight": 2,
+        "max_admitted": 4,
         "breaker_failures": 2,
         "breaker_reset_s": 10.0,
         "max_body_bytes": 1_000_000,
@@ -143,7 +150,10 @@ def test_invalid_requests_are_422_and_do_not_trip_breaker(
 ) -> None:
     app = app_for(bundle_directory)
     with TestClient(app) as client:
-        assert client.post("/v2/forecasts", json=bad_payload).status_code == 422
+        response = client.post("/v2/forecasts", json=bad_payload)
+        assert response.status_code == 422
+        if isinstance(response.json()["detail"], list):
+            assert response.json()["detail"][0]["loc"][0] == "body"
         assert app.state.gridcast["breaker"].state == "closed"
 
 
@@ -244,3 +254,115 @@ def test_timeout_holds_slot_until_worker_finishes(bundle_directory: Path) -> Non
         predictor.predict = original_predict  # type: ignore[method-assign]
         accepted = client.post("/v2/forecasts", json=payload(336, 1))
     assert accepted.status_code == 200
+
+
+def test_admission_rejects_before_body_read_and_records_metrics() -> None:
+    controller = AdmissionController(1)
+    assert controller.try_acquire()
+    metrics = create_metrics()
+    downstream_called = False
+    sent: list[dict[str, object]] = []
+
+    async def downstream(*_: object) -> None:
+        nonlocal downstream_called
+        downstream_called = True
+
+    async def receive() -> dict[str, object]:
+        raise AssertionError("rejected body must not be read")
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    middleware = ForecastAdmissionMiddleware(
+        downstream, controller=controller, metrics=metrics
+    )
+    asyncio.run(
+        middleware(
+            {"type": "http", "method": "POST", "path": "/v2/forecasts"},
+            receive,
+            send,
+        )
+    )
+
+    assert not downstream_called
+    assert sent[0]["status"] == 503
+    assert (b"retry-after", b"1") in sent[0]["headers"]  # type: ignore[operator]
+    assert (b"x-request-id",) == (sent[0]["headers"][2][0],)  # type: ignore[index]
+    exposition = metrics.registry.get_sample_value(
+        "gridcast_overload_rejections_total", {"stage": "admission"}
+    )
+    assert exposition == 1
+    assert (
+        metrics.registry.get_sample_value(
+            "gridcast_http_requests_total",
+            {"route": "/v2/forecasts", "method": "POST", "status": "503"},
+        )
+        == 1
+    )
+
+
+def test_admission_bypasses_health_and_releases_slots_on_all_outcomes() -> None:
+    controller = AdmissionController(1)
+    metrics = create_metrics()
+    sent: list[dict[str, object]] = []
+    calls: list[str] = []
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    async def normal(scope: dict[str, object], *_: object) -> None:
+        calls.append(scope["path"])  # type: ignore[arg-type]
+
+    middleware = ForecastAdmissionMiddleware(
+        normal, controller=controller, metrics=metrics
+    )
+    assert controller.try_acquire()
+    asyncio.run(
+        middleware({"type": "http", "method": "GET", "path": "/ready"}, receive, send)
+    )
+    assert calls == ["/ready"]
+    controller.release()
+
+    asyncio.run(
+        middleware(
+            {"type": "http", "method": "POST", "path": "/v1/forecasts"},
+            receive,
+            send,
+        )
+    )
+    assert controller.admitted == 0
+
+    async def exception(*_: object) -> None:
+        raise RuntimeError("downstream failed")
+
+    failing = ForecastAdmissionMiddleware(
+        exception, controller=controller, metrics=metrics
+    )
+    with pytest.raises(RuntimeError, match="downstream failed"):
+        asyncio.run(
+            failing(
+                {"type": "http", "method": "POST", "path": "/v2/forecasts"},
+                receive,
+                send,
+            )
+        )
+    assert controller.admitted == 0
+
+    async def disconnected(*_: object) -> None:
+        raise asyncio.CancelledError
+
+    cancelled = ForecastAdmissionMiddleware(
+        disconnected, controller=controller, metrics=metrics
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            cancelled(
+                {"type": "http", "method": "POST", "path": "/v2/forecasts"},
+                receive,
+                send,
+            )
+        )
+    assert controller.admitted == 0

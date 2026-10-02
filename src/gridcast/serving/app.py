@@ -21,9 +21,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import generate_latest
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from gridcast import __version__
 from gridcast.columns import Col
@@ -50,6 +52,83 @@ from gridcast.serving.settings import ServingSettings
 
 LOGGER = logging.getLogger(__name__)
 MAX_HISTORY_HOURS = 24 * 7 * 8
+FORECAST_PATHS = frozenset({"/v1/forecasts", "/v2/forecasts"})
+
+
+class AdmissionController:
+    """Keep a bounded count of forecast requests before their bodies are read."""
+
+    def __init__(self, max_admitted: int) -> None:
+        """Initialize a controller with a positive request capacity."""
+        self.max_admitted = max_admitted
+        self._admitted = 0
+
+    @property
+    def admitted(self) -> int:
+        """Return the number of requests currently admitted for parsing or serving."""
+        return self._admitted
+
+    def try_acquire(self) -> bool:
+        """Reserve a request slot without waiting."""
+        if self._admitted >= self.max_admitted:
+            return False
+        self._admitted += 1
+        return True
+
+    def release(self) -> None:
+        """Release one request slot after the ASGI response completes."""
+        self._admitted -= 1
+
+
+class ForecastAdmissionMiddleware:
+    """Reject excess forecast requests before body parsing or routing work."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        controller: AdmissionController,
+        metrics: ServingMetrics,
+    ) -> None:
+        """Wrap an ASGI app with forecast-only pre-body admission control."""
+        self.app = app
+        self.controller = controller
+        self.metrics = metrics
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Reserve a slot around the complete downstream ASGI exchange."""
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or scope["path"] not in FORECAST_PATHS
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        request_id = _request_id(scope)
+        started = time.perf_counter()
+        route = scope["path"]
+        if not self.controller.try_acquire():
+            self.metrics.overload_rejections.labels("admission").inc()
+            self.metrics.http_requests.labels(route, "POST", 503).inc()
+            self.metrics.http_duration.labels(route).observe(
+                time.perf_counter() - started
+            )
+            await _send_json(
+                send,
+                503,
+                {"detail": "service overloaded"},
+                request_id=request_id,
+                retry_after="1",
+            )
+            return
+
+        self.metrics.admitted_requests.set(self.controller.admitted)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.controller.release()
+            self.metrics.admitted_requests.set(self.controller.admitted)
 
 
 class HistoryRecord(BaseModel):
@@ -136,6 +215,7 @@ def create_app(
         "draining": False,
         "breaker": CircuitBreaker(settings.breaker_failures, settings.breaker_reset_s),
         "limiter": ConcurrencyLimiter(settings.max_in_flight),
+        "admission": AdmissionController(settings.max_admitted),
         "faults": FaultInjector(settings.fault_error_rate, settings.fault_latency_ms),
         "executor": None,
     }
@@ -220,12 +300,6 @@ def create_app(
                         {"detail": "request body too large"}, status_code=413
                     )
                     return finalize(response, _early_route_label(app, request))
-            body = await request.body()
-            if len(body) > settings.max_body_bytes:
-                response = JSONResponse(
-                    {"detail": "request body too large"}, status_code=413
-                )
-                return finalize(response, _early_route_label(app, request))
         response = await call_next(request)
         return finalize(response, _route_label(request))
 
@@ -258,15 +332,16 @@ def create_app(
         """Return isolated Prometheus exposition text."""
         return generate_latest(metrics.registry).decode("utf-8")
 
-    @app.post("/v2/forecasts", response_model=ForecastResponseV2)
-    async def forecast_v2(
-        payload: ForecastRequest, response: Response
-    ) -> ForecastResponseV2:
+    @app.post(
+        "/v2/forecasts",
+        response_model=ForecastResponseV2,
+        openapi_extra=_forecast_request_body(),
+    )
+    async def forecast_v2(request: Request, response: Response) -> Response:
         """Serve calibrated point and interval forecasts."""
+        payload = await _parse_forecast_request(request, settings.max_body_bytes)
         result = await _forecast(payload, "v2", state, metrics, settings)
-        response.headers["X-Model-Version"] = result.model_version
-        response.headers["X-GridCast-Degraded"] = str(result.degraded).lower()
-        return ForecastResponseV2(
+        model = ForecastResponseV2(
             model_version=result.model_version,
             origin=result.timestamps.iloc[0],
             horizon_hours=len(result.point),
@@ -290,12 +365,22 @@ def create_app(
                 )
             ],
         )
+        response.headers["X-Model-Version"] = result.model_version
+        response.headers["X-GridCast-Degraded"] = str(result.degraded).lower()
+        return Response(
+            content=model.model_dump_json(),
+            headers=dict(response.headers),
+            media_type="application/json",
+        )
 
-    @app.post("/v1/forecasts", response_model=ForecastResponseV1)
-    async def forecast_v1(
-        payload: ForecastRequest, response: Response
-    ) -> ForecastResponseV1:
+    @app.post(
+        "/v1/forecasts",
+        response_model=ForecastResponseV1,
+        openapi_extra=_forecast_request_body(),
+    )
+    async def forecast_v1(request: Request, response: Response) -> Response:
         """Serve deprecated point-only compatibility forecasts."""
+        payload = await _parse_forecast_request(request, settings.max_body_bytes)
         result = await _forecast(payload, "v1", state, metrics, settings)
         response.headers.update(
             {
@@ -306,7 +391,7 @@ def create_app(
                 "Link": '</v2/forecasts>; rel="successor-version"',
             }
         )
-        return ForecastResponseV1(
+        model = ForecastResponseV1(
             model_version=result.model_version,
             origin=result.timestamps.iloc[0],
             horizon_hours=len(result.point),
@@ -318,8 +403,150 @@ def create_app(
                 )
             ],
         )
+        return Response(
+            content=model.model_dump_json(),
+            headers=dict(response.headers),
+            media_type="application/json",
+        )
 
+    app.add_middleware(
+        ForecastAdmissionMiddleware,
+        controller=state["admission"],
+        metrics=metrics,
+    )
+    _install_openapi_schema(app)
     return app
+
+
+def _forecast_request_body() -> dict[str, object]:
+    """Keep manually parsed forecast bodies visible in the OpenAPI contract."""
+    return {
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/ForecastRequest"}
+                }
+            },
+            "required": True,
+        },
+        "responses": {
+            "422": {
+                "description": "Validation Error",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+                    }
+                },
+            }
+        },
+    }
+
+
+def _install_openapi_schema(app: FastAPI) -> None:
+    """Restore component definitions for the manually parsed request body."""
+    original_openapi = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            schema = original_openapi()
+            components = schema.setdefault("components", {}).setdefault("schemas", {})
+            request_schema = ForecastRequest.model_json_schema(
+                ref_template="#/components/schemas/{model}"
+            )
+            history = request_schema["properties"]["history"]
+            horizon = request_schema["properties"]["horizon_hours"]
+            history["items"]["$ref"] = "#/components/schemas/HistoryRecord"
+            horizon["minimum"] = float(horizon["minimum"])
+            horizon["maximum"] = float(horizon["maximum"])
+            request_definitions = request_schema["$defs"]
+            request_definitions["HistoryRecord"]["properties"]["load_mw"][
+                "exclusiveMinimum"
+            ] = 0.0
+            components.update(request_schema.pop("$defs", {}))
+            components["ForecastRequest"] = request_schema
+            components.update(_validation_error_schemas())
+            app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
+
+
+def _validation_error_schemas() -> dict[str, object]:
+    """Provide FastAPI's standard 422 models for manual validation failures."""
+    return {
+        "HTTPValidationError": {
+            "properties": {
+                "detail": {
+                    "items": {"$ref": "#/components/schemas/ValidationError"},
+                    "title": "Detail",
+                    "type": "array",
+                }
+            },
+            "title": "HTTPValidationError",
+            "type": "object",
+        },
+        "ValidationError": {
+            "properties": {
+                "ctx": {"title": "Context", "type": "object"},
+                "input": {"title": "Input"},
+                "loc": {
+                    "items": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                    "title": "Location",
+                    "type": "array",
+                },
+                "msg": {"title": "Message", "type": "string"},
+                "type": {"title": "Error Type", "type": "string"},
+            },
+            "required": ["loc", "msg", "type"],
+            "title": "ValidationError",
+            "type": "object",
+        },
+    }
+
+
+async def _parse_forecast_request(
+    request: Request, max_body_bytes: int
+) -> ForecastRequest:
+    """Read a bounded body and validate it through Pydantic's JSON parser."""
+    body = await request.body()
+    if len(body) > max_body_bytes:
+        raise HTTPException(status_code=413, detail="request body too large")
+    try:
+        return ForecastRequest.model_validate_json(body)
+    except ValidationError as error:
+        errors = []
+        for item in error.errors():
+            errors.append({**item, "loc": ("body", *item["loc"])})
+        raise RequestValidationError(errors) from error
+
+
+def _request_id(scope: Scope) -> str:
+    """Use the caller request ID where supplied, otherwise generate one."""
+    for name, value in scope.get("headers", []):
+        if name.lower() == b"x-request-id":
+            return str(value.decode("latin-1"))
+    return str(uuid.uuid4())
+
+
+async def _send_json(
+    send: Send,
+    status: int,
+    body: dict[str, str],
+    *,
+    request_id: str,
+    retry_after: str | None = None,
+) -> None:
+    """Send a small JSON ASGI response without invoking request-body receive."""
+    content = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(content)).encode()),
+        (b"x-request-id", request_id.encode("latin-1")),
+    ]
+    if retry_after is not None:
+        headers.append((b"retry-after", retry_after.encode()))
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": content})
 
 
 async def _forecast(
@@ -360,7 +587,7 @@ async def _forecast(
         )
         return result
     except OverloadedError as error:
-        metrics.overload_rejections.inc()
+        metrics.overload_rejections.labels("execution").inc()
         raise HTTPException(
             status_code=503, detail="service overloaded", headers={"Retry-After": "1"}
         ) from error
