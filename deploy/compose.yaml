@@ -54,6 +54,8 @@ services:
     environment:
       GRIDCAST_MODEL_URI: s3://gridcast-models/gridcast-load/0.1.0/
       GRIDCAST_ENV: local
+      GRIDCAST_MAX_IN_FLIGHT: ${GRIDCAST_MAX_IN_FLIGHT:-8}
+      GRIDCAST_MAX_ADMITTED: ${GRIDCAST_MAX_ADMITTED:-16}
       AWS_ENDPOINT_URL: http://localstack:4566
       # LocalStack-only credentials. Never use these values outside this stack.
       AWS_ACCESS_KEY_ID: test
@@ -81,6 +83,8 @@ services:
     environment:
       GRIDCAST_MODEL_URI: s3://gridcast-models/gridcast-load/0.2.0/
       GRIDCAST_ENV: local
+      GRIDCAST_MAX_IN_FLIGHT: ${GRIDCAST_MAX_IN_FLIGHT:-8}
+      GRIDCAST_MAX_ADMITTED: ${GRIDCAST_MAX_ADMITTED:-16}
       GRIDCAST_FAULT_ERROR_RATE: ${CANARY_FAULT_ERROR_RATE:-0}
       GRIDCAST_FAULT_LATENCY_MS: ${CANARY_FAULT_LATENCY_MS:-0}
       AWS_ENDPOINT_URL: http://localstack:4566

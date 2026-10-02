@@ -26,6 +26,7 @@ static_resources:
                               default_value: {numerator: 0, denominator: HUNDRED}
                           route:
                             cluster: canary
+                            # App deadline is 0.5 s, below this 1 s gateway timeout.
                             timeout: 1s
                             retry_policy:
                               retry_on: connect-failure,reset
@@ -68,6 +69,15 @@ static_resources:
     - name: stable
       connect_timeout: 0.25s
       type: LOGICAL_DNS
+      # Resolve through the libc resolver (Docker's embedded DNS works reliably
+      # there; c-ares failed to resolve compose service names on some hosts),
+      # IPv4 only, and re-resolve quickly so recreated containers are picked up.
+      dns_lookup_family: V4_ONLY
+      dns_refresh_rate: 2s
+      typed_dns_resolver_config:
+        name: envoy.network.dns_resolver.getaddrinfo
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
       lb_policy: ROUND_ROBIN
       load_assignment:
         cluster_name: stable
@@ -76,6 +86,15 @@ static_resources:
     - name: canary
       connect_timeout: 0.25s
       type: LOGICAL_DNS
+      # Resolve through the libc resolver (Docker's embedded DNS works reliably
+      # there; c-ares failed to resolve compose service names on some hosts),
+      # IPv4 only, and re-resolve quickly so recreated containers are picked up.
+      dns_lookup_family: V4_ONLY
+      dns_refresh_rate: 2s
+      typed_dns_resolver_config:
+        name: envoy.network.dns_resolver.getaddrinfo
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
       lb_policy: ROUND_ROBIN
       load_assignment:
         cluster_name: canary

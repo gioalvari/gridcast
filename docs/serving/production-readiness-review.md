@@ -15,7 +15,7 @@
 | AWS progressive rollout | Partial | CodeDeploy/ADOT reference is defined; no account validation or real alarms |
 | Authentication/authorization | Not done | Demo exposes no authN/authZ; use API Gateway/ALB auth or mTLS before public use |
 | Model provenance | Partial | checksum + immutable registry design; no signed model attestation or production registry |
-| Capacity/load SLO | Partial | k6 smoke gates CI; local capacity measured (~50 req/s per 1 vCPU task, `SERVING_PERFORMANCE.md`); pre-parse admission control and Fargate re-measurement still open |
+| Capacity/load SLO | Partial | k6 smoke gates CI; local capacity 75 req/s per 1-vCPU task without errors; admission limits (16 admitted / 8 executing) sized by Little's law and measured (`SERVING_PERFORMANCE.md`, ADR 0005); Fargate evidence still open |
 | Incident response | Partial | runbook exists; no declared pager ownership or scheduled exercise |
 
 **Conclusion:** suitable as an engineered local/demo serving layer, not approved

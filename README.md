@@ -286,8 +286,8 @@ from a versioned model bundle, designed to be released and operated safely.
 
 ```text
 client ─► Envoy (canary % + shadow %, runtime-tunable)
-            ├─► predict-stable  ┐  validate → concurrency limit → circuit breaker
-            └─► predict-canary  ┘  → LightGBM with deadline → seasonal-naive fallback
+            ├─► predict-stable  ┐  pre-parse admission → validate → concurrency limit
+            └─► predict-canary  ┘  → circuit breaker → LightGBM with deadline → fallback
                      ▲
           model registry (S3 / LocalStack): native LightGBM + sha256 manifest
 Prometheus + Grafana ◄─ metrics ─► rollout controller (promote or auto-rollback)
@@ -300,16 +300,20 @@ Prometheus + Grafana ◄─ metrics ─► rollout controller (promote or auto-r
   `/v1/forecasts` is deprecated with `Deprecation`, `Sunset` and `Link`
   headers. The OpenAPI contract is snapshotted and checked for breaking changes
   in CI.
-- **Resilience:** client input is validated before admission (422, never counted
-  as a model failure); concurrency is bounded without queueing (503 +
-  `Retry-After`); each prediction has a deadline, and timed-out work keeps its
-  slot until it finishes. Model errors open a circuit breaker and degrade to
-  seasonal naive with `degraded: true`.
+- **Resilience:** an outer pure-ASGI admission limit fast-fails excess forecast
+  requests before their bodies are read (503 + `Retry-After`), while health
+  checks remain available. Validated requests then use a bounded execution
+  limit; each prediction has a deadline, and timed-out work keeps its slot until
+  it finishes. Model errors open a circuit breaker and degrade to seasonal naive
+  with `degraded: true`.
 - **Safe rollout:** `gridcast rollout` moves the canary 5→25→50→100%, checking
   error rate, fallback rate and p95 on Prometheus, and rolls back automatically
   on a breach.
-- **Evidence:** a local load test sustained ~50 req/s per 1-vCPU task with p95
-  of 43 ms. A deliberately faulty canary was rolled back automatically at 5%
+- **Evidence:** one 1-vCPU task serves 75 req/s with no errors (p95 under
+  40 ms). Just past saturation (100 req/s), an admission limit sized with
+  Little's law keeps p95 at 27–47 ms with 0.1% rejections, against ~550 ms
+  without one; an oversized limit made latency worse. A deliberately faulty
+  canary was rolled back automatically at 5%
   ([SERVING_PERFORMANCE.md](SERVING_PERFORMANCE.md)).
 - **AWS reference:** Terraform for ECS Fargate with CodeDeploy blue/green canary,
   alarm-driven rollback, ADOT metrics, a least-privilege model-read role, and
@@ -369,8 +373,8 @@ Weekly walk-forward validation and historical holdout
 - Italian day-ahead benchmark with archived weather vintages
 - Decision regret and day-block confidence intervals
 - Deployment of the API and dashboard to a public demo environment
-- Serving: admission control before request parsing, then re-measure capacity
-  on Fargate
+- Serving: re-measure capacity and admission limits on Fargate, and derive the
+  limits from measured service time instead of fixed values
 
 ## Development
 
