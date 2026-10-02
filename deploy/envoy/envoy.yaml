@@ -1,0 +1,109 @@
+static_resources:
+  listeners:
+    - name: public_listener
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 8080}
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: forecasts
+                  virtual_hosts:
+                    - name: gridcast
+                      domains: ["*"]
+                      routes:
+                        # Current Envoy runtime_fraction is used instead of deprecated
+                        # weighted_clusters.runtime_key_prefix.  The first matching
+                        # route sends routing.canary_percent (0..100) to canary;
+                        # the following route is stable's deterministic fallback.
+                        - match:
+                            prefix: "/v1/"
+                            runtime_fraction:
+                              runtime_key: routing.canary_percent
+                              default_value: {numerator: 0, denominator: HUNDRED}
+                          route:
+                            cluster: canary
+                            # App deadline is 0.5 s, below this 1 s gateway timeout.
+                            timeout: 1s
+                            retry_policy:
+                              retry_on: connect-failure,reset
+                              num_retries: 1
+                              # POST retries exclude 5xx: a forecast may already have run.
+                        - match: {prefix: "/v1/"}
+                          route: &stable
+                            cluster: stable
+                            timeout: 1s
+                            retry_policy: {retry_on: "connect-failure,reset", num_retries: 1}
+                            request_mirror_policies:
+                              - cluster: canary
+                                runtime_fraction:
+                                  runtime_key: routing.shadow_percent
+                                  default_value: {numerator: 0, denominator: HUNDRED}
+                        - match:
+                            prefix: "/v2/"
+                            runtime_fraction:
+                              runtime_key: routing.canary_percent
+                              default_value: {numerator: 0, denominator: HUNDRED}
+                          route:
+                            cluster: canary
+                            timeout: 1s
+                            retry_policy: {retry_on: "connect-failure,reset", num_retries: 1}
+                        - match: {prefix: "/v2/"}
+                          route:
+                            cluster: stable
+                            timeout: 1s
+                            retry_policy: {retry_on: "connect-failure,reset", num_retries: 1}
+                            request_mirror_policies:
+                              - cluster: canary
+                                runtime_fraction:
+                                  runtime_key: routing.shadow_percent
+                                  default_value: {numerator: 0, denominator: HUNDRED}
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: stable
+      connect_timeout: 0.25s
+      type: LOGICAL_DNS
+      # Resolve through the libc resolver (Docker's embedded DNS works reliably
+      # there; c-ares failed to resolve compose service names on some hosts),
+      # IPv4 only, and re-resolve quickly so recreated containers are picked up.
+      dns_lookup_family: V4_ONLY
+      dns_refresh_rate: 2s
+      typed_dns_resolver_config:
+        name: envoy.network.dns_resolver.getaddrinfo
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: stable
+        endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: predict-stable, port_value: 8080}}}}]}]
+      outlier_detection: {consecutive_5xx: 3, interval: 5s, base_ejection_time: 15s}
+    - name: canary
+      connect_timeout: 0.25s
+      type: LOGICAL_DNS
+      # Resolve through the libc resolver (Docker's embedded DNS works reliably
+      # there; c-ares failed to resolve compose service names on some hosts),
+      # IPv4 only, and re-resolve quickly so recreated containers are picked up.
+      dns_lookup_family: V4_ONLY
+      dns_refresh_rate: 2s
+      typed_dns_resolver_config:
+        name: envoy.network.dns_resolver.getaddrinfo
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: canary
+        endpoints: [{lb_endpoints: [{endpoint: {address: {socket_address: {address: predict-canary, port_value: 8080}}}}]}]
+      outlier_detection: {consecutive_5xx: 3, interval: 5s, base_ejection_time: 15s}
+layered_runtime:
+  layers:
+    - name: admin
+      admin_layer: {}
+admin:
+  access_log_path: /tmp/admin_access.log
+  address: {socket_address: {address: 0.0.0.0, port_value: 9901}}

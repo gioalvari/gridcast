@@ -10,13 +10,15 @@ ENV UV_COMPILE_BYTECODE=1 \
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --extra serving --no-editable
 
 FROM python:3.11-slim AS runtime
 
 RUN apt-get update \
+    && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall --yes pip setuptools wheel \
     && groupadd --system gridcast \
     && useradd --system --gid gridcast --create-home gridcast
 
@@ -28,6 +30,19 @@ RUN /app/.venv/bin/python -c "import lightgbm; import gridcast.api"
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
+
+FROM runtime AS serving
+
+USER gridcast
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"
+
+CMD ["uvicorn", "--factory", "gridcast.serving.app:create_app", "--host", "0.0.0.0", "--port", "8080", "--timeout-graceful-shutdown", "20"]
+
+FROM runtime AS results
 
 USER gridcast
 

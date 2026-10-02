@@ -15,6 +15,7 @@ dependencies = [
     "pandas>=2.2",
     "plotly>=6.0",
     "psutil>=7.0",
+    "prometheus-client>=0.21",
     "pyarrow>=17.0",
     "scikit-learn>=1.6",
     "streamlit>=1.47",
@@ -37,6 +38,9 @@ dev = [
 extended = [
     "catboost>=1.2.8",
     "xgboost>=3.0",
+]
+serving = [
+    "boto3>=1.35",
 ]
 
 [project.scripts]

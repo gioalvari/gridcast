@@ -1,0 +1,71 @@
+name: release-serving
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-serving-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-ghcr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/login-action@v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push immutable release image
+        env:
+          IMAGE: ghcr.io/gioalvari/gridcast-serving
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker build --target serving --tag "$IMAGE:$TAG" --tag "$IMAGE:$SHA" .
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:$SHA"
+          echo "IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$TAG")" >> "$GITHUB_ENV"
+      - name: Generate CycloneDX SBOM
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/work" -w /work anchore/syft:v1.18.0 "${IMAGE_DIGEST}" -o cyclonedx-json=sbom.cdx.json
+      - uses: sigstore/cosign-installer@v3.8.2
+      - name: Keylessly sign image and attest SBOM
+        run: |
+          cosign sign --yes "$IMAGE_DIGEST"
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$IMAGE_DIGEST"
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: serving-sbom-${{ github.ref_name }}
+          path: sbom.cdx.json
+
+  # Reference only: no AWS account is configured for this personal project.
+  # Enable only after reviewing infra/terraform and setting account-specific values.
+  deploy-aws:
+    if: ${{ false }}
+    needs: publish-ghcr
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-central-1
+      - name: Reference deployment sequence
+        run: |
+          # aws ecr get-login-password | docker login ...
+          # aws ecs register-task-definition --cli-input-json file://taskdef.json
+          # aws deploy create-deployment --application-name gridcast-serving ...
+          echo "Disabled reference; do not deploy without an approved AWS account."

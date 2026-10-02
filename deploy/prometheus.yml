@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: predict-stable
+    static_configs: [{targets: ["predict-stable:8080"]}]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: service
+        replacement: predict-stable
+  - job_name: predict-canary
+    static_configs: [{targets: ["predict-canary:8080"]}]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: service
+        replacement: predict-canary
+  - job_name: envoy
+    metrics_path: /stats/prometheus
+    static_configs: [{targets: ["envoy:9901"]}]

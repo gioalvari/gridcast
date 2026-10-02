@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -61,7 +68,7 @@ jobs:
       - run: docker run --detach --name gridcast-ci --publish 8000:8000 gridcast:ci
       - name: Check liveness and missing-artifact readiness
         run: |
-          for attempt in {1..20}; do
+          for _attempt in {1..20}; do
             if curl --fail --silent http://127.0.0.1:8000/health; then
               break
             fi
@@ -73,3 +80,119 @@ jobs:
         run: docker logs gridcast-ci
       - if: always()
         run: docker rm --force gridcast-ci
+
+  openapi-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --frozen --extra serving
+      - run: make openapi
+      - run: git diff --exit-code -- docs/serving/openapi.json
+      - name: Check breaking changes against base schema
+        if: github.event_name == 'pull_request'
+        run: |
+          if git show "origin/${{ github.base_ref }}:docs/serving/openapi.json" > /tmp/base-openapi.json 2>/dev/null; then
+            docker run --rm -v /tmp/base-openapi.json:/base-openapi.json:ro -v "$PWD:/work:ro" -w /work tufin/oasdiff:1.11.1 breaking /base-openapi.json docs/serving/openapi.json --fail-on ERR
+          else
+            echo "No OpenAPI snapshot on base branch; skipping comparison."
+          fi
+
+  serving-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --frozen --extra serving
+      - run: uv run gridcast model package --synthetic --version 0.0.0-ci --output-dir artifacts/models/0.0.0-ci
+      - run: docker build --target serving --tag gridcast-serving:ci .
+      - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.2 image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 gridcast-serving:ci
+      - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/work" -w /work aquasec/trivy:0.58.2 image --format cyclonedx --output sbom.cdx.json gridcast-serving:ci
+      - name: Start image with read-only root filesystem
+        run: |
+          docker run --detach --name gridcast-serving-ci --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --publish 8080:8080 -e GRIDCAST_MODEL_URI=file:///models/0.0.0-ci -v "$PWD/artifacts/models:/models:ro" gridcast-serving:ci
+          for _attempt in {1..30}; do
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"; then break; fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          import urllib.request
+          from datetime import UTC, datetime, timedelta
+          origin = datetime(2025, 1, 1, tzinfo=UTC)
+          payload = {"history": [{"timestamp": (origin + timedelta(hours=i)).isoformat(), "load_mw": 10000 + i} for i in range(336)], "horizon_hours": 1}
+          request = urllib.request.Request("http://127.0.0.1:8080/v2/forecasts", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+          with urllib.request.urlopen(request, timeout=10) as response:
+              assert response.status == 200
+          PY
+      - if: failure()
+        run: docker logs gridcast-serving-ci || true
+      - if: always()
+        run: docker rm --force gridcast-serving-ci || true
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: serving-sbom
+          path: sbom.cdx.json
+          if-no-files-found: error
+
+  serving-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --frozen --extra serving
+      - run: make stack-up
+      - run: make loadtest-smoke
+      - run: make rollout-bad-canary
+      - if: always()
+        run: make stack-down
+      - uses: actions/upload-artifact@v4.6.2
+        if: always()
+        with:
+          name: serving-e2e-reports
+          path: |
+            load/results
+            artifacts/rollout
+          if-no-files-found: warn
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Static Terraform checks without credentials or backend
+        run: |
+          unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          docker run --rm -v "$PWD:/work" -w /work/infra/terraform hashicorp/terraform:1.9 fmt -check -recursive
+          docker run --rm -v "$PWD:/work" -w /work/infra/terraform hashicorp/terraform:1.9 init -backend=false
+          docker run --rm -v "$PWD:/work" -w /work/infra/terraform hashicorp/terraform:1.9 validate
+          docker run --rm -v "$PWD:/work" -w /work ghcr.io/terraform-linters/tflint:v0.53.0 --chdir=infra/terraform --init
+          docker run --rm -v "$PWD:/work" -w /work ghcr.io/terraform-linters/tflint:v0.53.0 --chdir=infra/terraform
+          docker run --rm -v "$PWD:/work" -w /work bridgecrew/checkov:3.2.295 -d infra/terraform
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv export --frozen --no-dev --extra serving --no-emit-project --output-file /tmp/requirements-serving.txt
+      - run: uvx --from pip-audit==2.8.0 pip-audit --requirement /tmp/requirements-serving.txt
+
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7

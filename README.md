@@ -278,6 +278,62 @@ docker run --rm -p 8000:8000 \
   gridcast:latest
 ```
 
+## Production model serving
+
+The read-only API above publishes evaluation artifacts. `gridcast.serving` is
+the online counterpart: a separate service that computes forecasts per request
+from a versioned model bundle, designed to be released and operated safely.
+
+```text
+client ─► Envoy (canary % + shadow %, runtime-tunable)
+            ├─► predict-stable  ┐  pre-parse admission → validate → concurrency limit
+            └─► predict-canary  ┘  → circuit breaker → LightGBM with deadline → fallback
+                     ▲
+          model registry (S3 / LocalStack): native LightGBM + sha256 manifest
+Prometheus + Grafana ◄─ metrics ─► rollout controller (promote or auto-rollback)
+```
+
+- **Model bundles without pickle:** native LightGBM text models and a strict
+  manifest (feature schema, training data hash, calibration, drift reference,
+  runtime versions, per-file sha256). Registry versions are immutable.
+- **Versioned API:** `POST /v2/forecasts` returns calibrated P10/P50/P90.
+  `/v1/forecasts` is deprecated with `Deprecation`, `Sunset` and `Link`
+  headers. The OpenAPI contract is snapshotted and checked for breaking changes
+  in CI.
+- **Resilience:** an outer pure-ASGI admission limit fast-fails excess forecast
+  requests before their bodies are read (503 + `Retry-After`), while health
+  checks remain available. Validated requests then use a bounded execution
+  limit; each prediction has a deadline, and timed-out work keeps its slot until
+  it finishes. Model errors open a circuit breaker and degrade to seasonal naive
+  with `degraded: true`.
+- **Safe rollout:** `gridcast rollout` moves the canary 5→25→50→100%, checking
+  error rate, fallback rate and p95 on Prometheus, and rolls back automatically
+  on a breach.
+- **Evidence:** one 1-vCPU task serves 75 req/s with no errors (p95 under
+  40 ms). Just past saturation (100 req/s), an admission limit sized with
+  Little's law keeps p95 at 27–47 ms with 0.1% rejections, against ~550 ms
+  without one; an oversized limit made latency worse. A deliberately faulty
+  canary was rolled back automatically at 5%
+  ([SERVING_PERFORMANCE.md](SERVING_PERFORMANCE.md)).
+- **AWS reference:** Terraform for ECS Fargate with CodeDeploy blue/green canary,
+  alarm-driven rollback, ADOT metrics, a least-privilege model-read role, and
+  GitHub OIDC deploys ([infra/terraform](infra/terraform/README.md)). It is
+  validated statically (`validate`, `tflint`, `checkov`) and has **never been
+  applied**.
+
+```bash
+make model-package            # synthetic bundle 0.1.0 into artifacts/models/
+make serve                    # http://127.0.0.1:8080/docs
+make stack-up                 # LocalStack, stable/canary, Envoy, Prometheus, Grafana
+make loadtest-smoke           # k6 with SLO thresholds
+make rollout                  # progressive canary with automatic rollback
+make rollout-bad-canary       # proves rollback on a faulty canary
+make stack-down
+```
+
+Design decisions, the team serving standard, the production-readiness review,
+the runbook and the threat model are in [docs/serving](docs/serving/README.md).
+
 ## Methodology
 
 - **Frequency:** hourly
@@ -317,6 +373,8 @@ Weekly walk-forward validation and historical holdout
 - Italian day-ahead benchmark with archived weather vintages
 - Decision regret and day-block confidence intervals
 - Deployment of the API and dashboard to a public demo environment
+- Serving: re-measure capacity and admission limits on Fargate, and derive the
+  limits from measured service time instead of fixed values
 
 ## Development
 

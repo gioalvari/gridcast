@@ -1,0 +1,6 @@
+vpc_id                 = "vpc-0123456789abcdef0"
+private_subnet_ids     = ["subnet-private-a", "subnet-private-b"]
+public_subnet_ids      = ["subnet-public-a", "subnet-public-b"]
+acm_certificate_arn    = "arn:aws:acm:eu-central-1:123456789012:certificate/REPLACE_ME"
+image                  = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/gridcast-serving@sha256:REPLACE_ME"
+placeholder_secret_arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:gridcast/placeholder-REPLACE_ME"

@@ -1,0 +1,138 @@
+name: gridcast-serving
+
+services:
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: eu-central-1
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  model-init:
+    image: gridcast-serving:latest
+    build:
+      context: ..
+      target: serving
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      # LocalStack-only credentials. Never use these values outside this stack.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: eu-central-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+    command: >-
+      sh -ec 'rm -rf /tmp/0.1.0 /tmp/0.2.0; mkdir -p /tmp/bin;
+      printf "#!/bin/sh\\nprintf %s\\n local-container\\n" > /tmp/bin/git;
+      chmod +x /tmp/bin/git;
+      export PATH=/tmp/bin:$$PATH;
+      python -c "import boto3; boto3.client(\"s3\").create_bucket(Bucket=\"gridcast-models\", CreateBucketConfiguration={\"LocationConstraint\": \"eu-central-1\"})"
+      || true;
+      gridcast model package --synthetic --version 0.1.0 --output-dir /tmp/0.1.0;
+      gridcast model publish /tmp/0.1.0 --uri s3://gridcast-models/gridcast-load/0.1.0/ || true;
+      gridcast model package --synthetic --version 0.2.0 --output-dir /tmp/0.2.0;
+      gridcast model publish /tmp/0.2.0 --uri s3://gridcast-models/gridcast-load/0.2.0/ || true'
+    restart: "no"
+
+  predict-stable:
+    image: gridcast-serving:latest
+    build:
+      context: ..
+      target: serving
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      GRIDCAST_MODEL_URI: s3://gridcast-models/gridcast-load/0.1.0/
+      GRIDCAST_ENV: local
+      GRIDCAST_MAX_IN_FLIGHT: ${GRIDCAST_MAX_IN_FLIGHT:-8}
+      GRIDCAST_MAX_ADMITTED: ${GRIDCAST_MAX_ADMITTED:-16}
+      AWS_ENDPOINT_URL: http://localstack:4566
+      # LocalStack-only credentials. Never use these values outside this stack.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: eu-central-1
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1G}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  predict-canary:
+    image: gridcast-serving:latest
+    build:
+      context: ..
+      target: serving
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      GRIDCAST_MODEL_URI: s3://gridcast-models/gridcast-load/0.2.0/
+      GRIDCAST_ENV: local
+      GRIDCAST_MAX_IN_FLIGHT: ${GRIDCAST_MAX_IN_FLIGHT:-8}
+      GRIDCAST_MAX_ADMITTED: ${GRIDCAST_MAX_ADMITTED:-16}
+      GRIDCAST_FAULT_ERROR_RATE: ${CANARY_FAULT_ERROR_RATE:-0}
+      GRIDCAST_FAULT_LATENCY_MS: ${CANARY_FAULT_LATENCY_MS:-0}
+      AWS_ENDPOINT_URL: http://localstack:4566
+      # LocalStack-only credentials. Never use these values outside this stack.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: eu-central-1
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1G}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  envoy:
+    image: envoyproxy/envoy:v1.32.3
+    depends_on:
+      predict-stable: {condition: service_healthy}
+      predict-canary: {condition: service_healthy}
+    ports: ["8080:8080", "9901:9901"]
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml"]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    depends_on: [prometheus]
+    ports: ["3000:3000"]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboard.json:/var/lib/grafana/dashboards/gridcast.json:ro
+
+  k6:
+    image: grafana/k6:0.55.0
+    profiles: [load]
+    volumes:
+      - ../load:/load:ro
+      - ../load/results:/results
+    environment:
+      BASE_URL: http://envoy:8080
+      K6_SUMMARY_TREND_STATS: "avg,min,med,max,p(90),p(95),p(99)"
+    entrypoint: ["k6"]

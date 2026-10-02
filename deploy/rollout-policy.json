@@ -1,0 +1,9 @@
+{
+  "steps": [5, 25, 50, 100],
+  "bake_seconds": 10,
+  "min_requests": 5,
+  "max_wait_seconds": 60,
+  "max_error_rate": 0.05,
+  "max_p95_latency_ms": 500,
+  "max_fallback_rate": 0.05
+}
