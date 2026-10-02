@@ -112,13 +112,13 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       - run: uv sync --frozen --extra serving
-      - run: uv run gridcast model package --synthetic --version ci --output-dir artifacts/models/ci
+      - run: uv run gridcast model package --synthetic --version 0.0.0-ci --output-dir artifacts/models/0.0.0-ci
       - run: docker build --target serving --tag gridcast-serving:ci .
       - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.2 image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 gridcast-serving:ci
       - run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/work" -w /work aquasec/trivy:0.58.2 image --format cyclonedx --output sbom.cdx.json gridcast-serving:ci
       - name: Start image with read-only root filesystem
         run: |
-          docker run --detach --name gridcast-serving-ci --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --publish 8080:8080 -e GRIDCAST_MODEL_URI=file:///models/ci -v "$PWD/artifacts/models:/models:ro" gridcast-serving:ci
+          docker run --detach --name gridcast-serving-ci --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --publish 8080:8080 -e GRIDCAST_MODEL_URI=file:///models/0.0.0-ci -v "$PWD/artifacts/models:/models:ro" gridcast-serving:ci
           for _attempt in {1..30}; do
             if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"; then break; fi
             sleep 1
@@ -134,11 +134,10 @@ jobs:
               assert response.status == 200
           PY
       - if: failure()
-        run: docker logs gridcast-serving-ci
+        run: docker logs gridcast-serving-ci || true
       - if: always()
         run: docker rm --force gridcast-serving-ci || true
       - uses: actions/upload-artifact@v4.6.2
-        if: always()
         with:
           name: serving-sbom
           path: sbom.cdx.json
